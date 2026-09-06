@@ -82,5 +82,5 @@
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   },
-  "packageManager": "pnpm@10.28.2+sha512.560341e36470f004d431ec9ad8bb88bb2cc923a9c6dab29b95b98eb40ea95cb6a3de2dab3c721539bc7ed0d38cbe371531ec48a203c39b5373d576ed47dd6239"
+  "packageManager": "pnpm@11.24.0+sha512.bd27e345e976dcb0be0b7a1228217b049a817e21b1f355c90dbe7dc46671895a8bc1e6d06c24554505ea93ea0b45f489a27ec1bfbc8de6a9659fca0f16fa0000"
 }
