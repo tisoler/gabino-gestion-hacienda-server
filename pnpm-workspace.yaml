@@ -1,0 +1,4 @@
+allowBuilds:
+  '@firebase/util': true
+  '@nestjs/core': true
+  protobufjs: true
