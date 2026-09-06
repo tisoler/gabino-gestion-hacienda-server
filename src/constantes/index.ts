@@ -5,6 +5,30 @@ export const Roles = {
   CLIENTE: "cliente",
 } as const;
 
+/**
+ * Catálogos multitenant: `id_empresa` NULL = valor global (para todas las
+ * empresas); con valor = valor creado por/para esa empresa.
+ */
+export const CATALOGO_TIPOS = [
+  "raza",
+  "categoria",
+  "proveedor",
+  "lugar_origen",
+  "motivo",
+] as const;
+export type CatalogoTipo = (typeof CATALOGO_TIPOS)[number];
+
+/** Tipos de movimiento sanitario del animal (tabla `animal_movimiento`). */
+export const MOVIMIENTO_TIPOS = [
+  "a_enfermeria",
+  "de_enfermeria",
+  "cambio_estado",
+] as const;
+export type MovimientoTipo = (typeof MOVIMIENTO_TIPOS)[number];
+
+/** Estados sanitarios del animal. */
+export const ANIMAL_ESTADOS = ["sano", "enfermo", "muerto"] as const;
+
 export type Role = (typeof Roles)[keyof typeof Roles];
 
 /**

@@ -8,12 +8,21 @@ import { ClientesModule } from "./clientes/clientes.module";
 import { UsuariosModule } from "./usuarios/usuarios.module";
 import { LotesModule } from "./lotes/lotes.module";
 import { CorralesModule } from "./corrales/corrales.module";
+import { CatalogosModule } from "./catalogos/catalogos.module";
 
 import { Empresa } from "./entities/empresa.entity";
 import { EmpresaCliente } from "./entities/empresa-cliente.entity";
 import { Lote } from "./entities/lote.entity";
 import { Animal } from "./entities/animal.entity";
 import { Corral } from "./entities/corral.entity";
+import { AnimalMovimiento } from "./entities/animal-movimiento.entity";
+import {
+  Categoria,
+  LugarOrigen,
+  Motivo,
+  Proveedor,
+  Raza,
+} from "./entities/catalogo.entity";
 
 @Module({
   imports: [
@@ -29,7 +38,19 @@ import { Corral } from "./entities/corral.entity";
         username: configService.get<string>("DB_USERNAME"),
         password: configService.get<string>("DB_PASSWORD"),
         database: configService.get<string>("DB_DATABASE"),
-        entities: [Empresa, EmpresaCliente, Lote, Animal, Corral],
+        entities: [
+          Empresa,
+          EmpresaCliente,
+          Lote,
+          Animal,
+          Corral,
+          AnimalMovimiento,
+          Raza,
+          Categoria,
+          Proveedor,
+          LugarOrigen,
+          Motivo,
+        ],
         synchronize: false, // Migraciones manuales
         logging: true,
       }),
@@ -42,6 +63,7 @@ import { Corral } from "./entities/corral.entity";
     UsuariosModule,
     LotesModule,
     CorralesModule,
+    CatalogosModule,
   ],
 })
 export class AppModule {}

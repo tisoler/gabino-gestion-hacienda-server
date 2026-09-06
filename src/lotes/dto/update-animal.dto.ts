@@ -6,6 +6,8 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  Min,
+  ValidateIf,
 } from "class-validator";
 
 export class UpdateAnimalDto {
@@ -21,6 +23,20 @@ export class UpdateAnimalDto {
   @IsString()
   @MaxLength(50)
   pelaje?: string;
+
+  /** Catálogo `raza` (global o de la empresa). null = limpiar. */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idRaza?: number | null;
+
+  /** Catálogo `categoria` (global o de la empresa). null = limpiar. */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idCategoria?: number | null;
 
   @IsOptional()
   @IsDateString()
@@ -54,4 +70,19 @@ export class UpdateAnimalDto {
   @IsOptional()
   @IsIn(["sano", "enfermo", "muerto"])
   estado?: string;
+
+  /**
+   * Motivo/causa (obligatorio si `estado` cambia a 'enfermo' o 'muerto').
+   * Se registra en el historial de movimientos del animal.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  motivo?: string;
+
+  /** Alternativa: id de un `motivo` existente (global o de la empresa). */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  idMotivo?: number;
 }

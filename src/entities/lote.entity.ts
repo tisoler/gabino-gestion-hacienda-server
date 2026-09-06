@@ -11,13 +11,17 @@ import {
 import { Empresa } from "./empresa.entity";
 import { Animal } from "./animal.entity";
 import { Corral } from "./corral.entity";
+import { LugarOrigen, Proveedor } from "./catalogo.entity";
 
 /**
  * Lote (partida de animales) hospedado por una empresa. `idCliente` es el UID
- * de Firebase del dueño de la partida (opcional): no hay FK, la identidad vive
- * en Firestore. `idCorral` es el corral COMÚN donde está la partida; el estado
- * libre/ocupado del corral se deriva de esta columna. `color` se usa para el
- * mapa de corrales (se auto-asigna de la paleta al crear si no viene).
+ * de Firebase del dueño de la partida (opcional): puede ser un CLIENTE
+ * vinculado o el ANFITRIÓN de la empresa (animales propios). No hay FK: la
+ * identidad vive en Firestore. `idCorral` es el corral COMÚN donde está la
+ * partida; el estado libre/ocupado del corral se deriva de esta columna.
+ * `color` se usa para el mapa de corrales (se auto-asigna de la paleta al
+ * crear si no viene). `idProveedor`/`idLugarOrigen` vienen de los catálogos
+ * (globales o de la empresa).
  */
 @Entity("lote")
 export class Lote {
@@ -43,6 +47,20 @@ export class Lote {
 
   @Column({ name: "id_cliente", type: "varchar", length: 128, nullable: true })
   idCliente: string | null;
+
+  @Column({ name: "id_proveedor", type: "int", nullable: true })
+  idProveedor: number | null;
+
+  @ManyToOne(() => Proveedor, { nullable: true })
+  @JoinColumn({ name: "id_proveedor" })
+  proveedor: Proveedor;
+
+  @Column({ name: "id_lugar_origen", type: "int", nullable: true })
+  idLugarOrigen: number | null;
+
+  @ManyToOne(() => LugarOrigen, { nullable: true })
+  @JoinColumn({ name: "id_lugar_origen" })
+  lugarOrigen: LugarOrigen;
 
   @Column()
   nombre: string;

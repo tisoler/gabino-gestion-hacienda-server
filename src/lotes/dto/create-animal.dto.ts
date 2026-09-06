@@ -6,6 +6,8 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  Min,
+  ValidateIf,
 } from "class-validator";
 
 export class CreateAnimalDto {
@@ -21,6 +23,20 @@ export class CreateAnimalDto {
   @IsString()
   @MaxLength(50)
   pelaje?: string;
+
+  /** Catálogo `raza` (global o de la empresa). */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idRaza?: number | null;
+
+  /** Catálogo `categoria` (global o de la empresa). */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idCategoria?: number | null;
 
   @IsOptional()
   @IsDateString()
@@ -54,4 +70,10 @@ export class CreateAnimalDto {
   @IsOptional()
   @IsIn(["sano", "enfermo", "muerto"])
   estado?: string;
+
+  /** Motivo/causa (obligatorio si `estado` no es 'sano'). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  motivo?: string;
 }

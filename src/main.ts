@@ -10,11 +10,11 @@ async function bootstrap() {
   const corsOrigins = process.env.CORS_ORIGINS?.split(",")
     .map((origin) => origin.trim())
     .filter(Boolean) ?? [
-      "http://localhost:3053",
-      "http://localhost:3056",
-      "http://localhost:5173",
-      "http://localhost:5174",
-    ];
+    "http://localhost:3053",
+    "http://localhost:3056",
+    "http://localhost:5173",
+    "http://localhost:5174",
+  ];
   app.enableCors({
     origin: corsOrigins,
     credentials: true,

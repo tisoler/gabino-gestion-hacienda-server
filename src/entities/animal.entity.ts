@@ -9,6 +9,7 @@ import {
 } from "typeorm";
 import { Lote } from "./lote.entity";
 import { Corral } from "./corral.entity";
+import { Categoria, Raza } from "./catalogo.entity";
 
 /**
  * Animal (cabeza de ganado) dentro de un lote. Campos según la planilla
@@ -49,6 +50,20 @@ export class Animal {
 
   @Column({ type: "varchar", length: 50, nullable: true })
   pelaje: string;
+
+  @Column({ name: "id_raza", type: "int", nullable: true })
+  idRaza: number | null;
+
+  @ManyToOne(() => Raza, { nullable: true })
+  @JoinColumn({ name: "id_raza" })
+  raza: Raza;
+
+  @Column({ name: "id_categoria", type: "int", nullable: true })
+  idCategoria: number | null;
+
+  @ManyToOne(() => Categoria, { nullable: true })
+  @JoinColumn({ name: "id_categoria" })
+  categoria: Categoria;
 
   @Column({ name: "fecha_pesaje_ini", type: "date", nullable: true })
   fechaPesajeIni: Date | null;

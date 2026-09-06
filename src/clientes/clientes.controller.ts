@@ -56,6 +56,18 @@ export class ClientesController {
     return this.clientesService.findOperarios(req.user);
   }
 
+  @Get("titulares")
+  @Permissions("lectura:cliente")
+  @ApiOperation({
+    summary: "Listar titulares posibles de un lote",
+    description:
+      "Clientes vinculados a mi empresa + el anfitrión de la empresa (un " +
+      "anfitrión puede tener animales propios en su establecimiento).",
+  })
+  findAllTitulares(@Request() req): Promise<ClienteVinculado[]> {
+    return this.clientesService.findAllTitulares(req.user);
+  }
+
   @Get("candidatos")
   @Permissions("lectura:cliente")
   @ApiOperation({

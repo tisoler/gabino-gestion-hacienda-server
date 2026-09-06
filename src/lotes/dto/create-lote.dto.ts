@@ -7,6 +7,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateIf,
 } from "class-validator";
 
 export class CreateLoteDto {
@@ -28,6 +29,20 @@ export class CreateLoteDto {
   @IsString()
   @MaxLength(128)
   idCliente?: string;
+
+  /** Catálogo `proveedor` (global o de la empresa). */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idProveedor?: number | null;
+
+  /** Catálogo `lugar_origen` (global o de la empresa). */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idLugarOrigen?: number | null;
 
   /** Corral COMÚN de la empresa, libre (o el propio al editar). */
   @IsOptional()

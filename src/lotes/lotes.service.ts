@@ -10,12 +10,15 @@ import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
 import { Corral } from "../entities/corral.entity";
 import { Empresa } from "../entities/empresa.entity";
+import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Roles, PALETA_LOTE } from "src/constantes";
 import { CreateLoteDto } from "./dto/create-lote.dto";
 import { UpdateLoteDto } from "./dto/update-lote.dto";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
+import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
+import { CatalogosService } from "../catalogos/catalogos.service";
 
 export interface LoteResumen {
   id: number;
@@ -25,6 +28,10 @@ export interface LoteResumen {
   fecha: Date | null;
   idCliente: string | null;
   nombreCliente: string | null;
+  idProveedor: number | null;
+  nombreProveedor: string | null;
+  idLugarOrigen: number | null;
+  nombreLugarOrigen: string | null;
   idCorral: number | null;
   corralNombre: string | null;
   color: string | null;
@@ -45,7 +52,10 @@ export class LotesService {
     private corralRepository: Repository<Corral>,
     @InjectRepository(Empresa)
     private empresaRepository: Repository<Empresa>,
+    @InjectRepository(AnimalMovimiento)
+    private movimientoRepository: Repository<AnimalMovimiento>,
     private cache: FirestoreCacheService,
+    private catalogos: CatalogosService,
   ) {}
 
   /**
@@ -58,7 +68,9 @@ export class LotesService {
   async findAll(user: any, currentEmpresaId?: number): Promise<LoteResumen[]> {
     const query = this.loteRepository
       .createQueryBuilder("lote")
-      .leftJoinAndSelect("lote.corral", "corral");
+      .leftJoinAndSelect("lote.corral", "corral")
+      .leftJoinAndSelect("lote.proveedor", "proveedor")
+      .leftJoinAndSelect("lote.lugarOrigen", "lugarOrigen");
     const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
     const isCliente = !isAdmin && user.roles?.includes(Roles.CLIENTE);
     const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
@@ -86,20 +98,24 @@ export class LotesService {
   }
 
   async findOne(id: number, user: any) {
-    const lote = await this.getLoteVerificado(id, user);
+    const lote = await this.getLoteVerificado(id, user, [
+      "corral",
+      "proveedor",
+      "lugarOrigen",
+    ]);
     const animales = await this.animalRepository.find({
       where: { idLote: id },
+      relations: ["raza", "categoria"],
       order: { nAnimal: "ASC", id: "ASC" },
     });
     const nombreCliente = await this.nombreDeCliente(lote.idCliente);
-    const corral =
-      lote.idCorral != null
-        ? await this.corralRepository.findOne({ where: { id: lote.idCorral } })
-        : null;
+    const { corral, proveedor, lugarOrigen, ...base } = lote as any;
     return {
-      ...lote,
+      ...base,
       nombreCliente,
       corralNombre: corral?.nombre ?? null,
+      nombreProveedor: proveedor?.nombre ?? null,
+      nombreLugarOrigen: lugarOrigen?.nombre ?? null,
       animales: animales.map((a) => this.animalJson(a)),
     };
   }
@@ -136,7 +152,23 @@ export class LotesService {
     }
 
     if (createLoteDto.idCliente) {
-      await this.validarClienteDeEmpresa(createLoteDto.idCliente, idEmpresa);
+      await this.validarTitularDeEmpresa(createLoteDto.idCliente, idEmpresa);
+    }
+    if (createLoteDto.idProveedor != null) {
+      await this.catalogos.validarValor(
+        "proveedor",
+        createLoteDto.idProveedor,
+        idEmpresa,
+        "proveedor",
+      );
+    }
+    if (createLoteDto.idLugarOrigen != null) {
+      await this.catalogos.validarValor(
+        "lugar_origen",
+        createLoteDto.idLugarOrigen,
+        idEmpresa,
+        "lugar de origen",
+      );
     }
     if (createLoteDto.idCorral != null) {
       await this.validarCorralComunLibre(
@@ -154,6 +186,8 @@ export class LotesService {
       descripcion: createLoteDto.descripcion ?? null,
       fecha: this.aDate(createLoteDto.fecha),
       idCliente: createLoteDto.idCliente ?? null,
+      idProveedor: createLoteDto.idProveedor ?? null,
+      idLugarOrigen: createLoteDto.idLugarOrigen ?? null,
       idCorral: createLoteDto.idCorral ?? null,
       color,
     });
@@ -176,7 +210,7 @@ export class LotesService {
     }
     if (updateLoteDto.idCliente !== undefined) {
       if (updateLoteDto.idCliente) {
-        await this.validarClienteDeEmpresa(
+        await this.validarTitularDeEmpresa(
           updateLoteDto.idCliente,
           lote.idEmpresa,
         );
@@ -184,6 +218,28 @@ export class LotesService {
       } else {
         lote.idCliente = null;
       }
+    }
+    if (updateLoteDto.idProveedor !== undefined) {
+      if (updateLoteDto.idProveedor != null) {
+        await this.catalogos.validarValor(
+          "proveedor",
+          updateLoteDto.idProveedor,
+          lote.idEmpresa,
+          "proveedor",
+        );
+      }
+      lote.idProveedor = updateLoteDto.idProveedor ?? null;
+    }
+    if (updateLoteDto.idLugarOrigen !== undefined) {
+      if (updateLoteDto.idLugarOrigen != null) {
+        await this.catalogos.validarValor(
+          "lugar_origen",
+          updateLoteDto.idLugarOrigen,
+          lote.idEmpresa,
+          "lugar de origen",
+        );
+      }
+      lote.idLugarOrigen = updateLoteDto.idLugarOrigen ?? null;
     }
     if (updateLoteDto.idCorral !== undefined) {
       if (updateLoteDto.idCorral) {
@@ -213,11 +269,35 @@ export class LotesService {
     user: any,
   ): Promise<any> {
     const lote = await this.getLoteVerificado(idLote, user);
+    if (dto.idRaza != null) {
+      await this.catalogos.validarValor(
+        "raza",
+        dto.idRaza,
+        lote.idEmpresa,
+        "raza",
+      );
+    }
+    if (dto.idCategoria != null) {
+      await this.catalogos.validarValor(
+        "categoria",
+        dto.idCategoria,
+        lote.idEmpresa,
+        "categoría",
+      );
+    }
+    const estado = dto.estado ?? "sano";
+    if (estado !== "sano" && !dto.motivo?.trim()) {
+      throw new BadRequestException(
+        "Indicá la razón o enfermedad al dar de alta un animal enfermo o muerto",
+      );
+    }
     const base = {
       idLote: lote.id,
       nAnimal: dto.nAnimal ?? null,
       sexo: dto.sexo ?? null,
       pelaje: dto.pelaje ?? null,
+      idRaza: dto.idRaza ?? null,
+      idCategoria: dto.idCategoria ?? null,
       fechaPesajeIni: this.aDate(dto.fechaPesajeIni),
       pesoInicial: dto.pesoInicial ?? null,
       desbasteIni: dto.desbasteIni ?? 0,
@@ -225,12 +305,24 @@ export class LotesService {
       pesoFinal: dto.pesoFinal ?? null,
       desbasteFin: dto.desbasteFin ?? 0,
       observaciones: dto.observaciones ?? null,
-      estado: dto.estado ?? "sano",
+      estado,
       idCorralEnfermeria: null,
     };
     const computed = this.computar(base as any);
     const animal = this.animalRepository.create({ ...base, ...computed });
-    return this.animalJson(await this.animalRepository.save(animal));
+    const saved = await this.animalRepository.save(animal);
+    if (estado !== "sano") {
+      await this.registrarMovimiento({
+        idAnimal: saved.id,
+        idEmpresa: lote.idEmpresa,
+        tipo: "cambio_estado",
+        estadoAntes: "sano",
+        estadoDespues: estado,
+        motivo: dto.motivo,
+        user,
+      });
+    }
+    return this.animalJson(saved);
   }
 
   async updateAnimal(
@@ -250,6 +342,28 @@ export class LotesService {
     if (dto.nAnimal !== undefined) animal.nAnimal = dto.nAnimal;
     if (dto.sexo !== undefined) animal.sexo = dto.sexo;
     if (dto.pelaje !== undefined) animal.pelaje = dto.pelaje;
+    if (dto.idRaza !== undefined) {
+      if (dto.idRaza != null) {
+        await this.catalogos.validarValor(
+          "raza",
+          dto.idRaza,
+          lote.idEmpresa,
+          "raza",
+        );
+      }
+      animal.idRaza = dto.idRaza ?? null;
+    }
+    if (dto.idCategoria !== undefined) {
+      if (dto.idCategoria != null) {
+        await this.catalogos.validarValor(
+          "categoria",
+          dto.idCategoria,
+          lote.idEmpresa,
+          "categoría",
+        );
+      }
+      animal.idCategoria = dto.idCategoria ?? null;
+    }
     if (dto.fechaPesajeIni !== undefined) {
       animal.fechaPesajeIni = this.aDate(dto.fechaPesajeIni);
     }
@@ -263,17 +377,43 @@ export class LotesService {
     if (dto.observaciones !== undefined) {
       animal.observaciones = dto.observaciones;
     }
-    if (dto.estado !== undefined) {
+
+    let estadoNuevo: string | null = null;
+    const estadoAnterior = animal.estado;
+    let motivoTexto: string | null = null;
+    if (dto.estado !== undefined && dto.estado !== animal.estado) {
       if (dto.estado === "muerto" && animal.idCorralEnfermeria != null) {
         throw new BadRequestException(
           "Traé primero al animal de enfermería para registrar su fallecimiento",
         );
       }
+      const requiereMotivo =
+        dto.estado === "enfermo" || dto.estado === "muerto";
+      motivoTexto = await this.resolverMotivo(
+        dto,
+        lote.idEmpresa,
+        requiereMotivo,
+      );
       animal.estado = dto.estado;
+      estadoNuevo = dto.estado;
     }
 
     Object.assign(animal, this.computar(animal));
-    return this.animalJson(await this.animalRepository.save(animal));
+    const saved = await this.animalRepository.save(animal);
+
+    if (estadoNuevo) {
+      await this.registrarMovimiento({
+        idAnimal: saved.id,
+        idEmpresa: lote.idEmpresa,
+        tipo: "cambio_estado",
+        estadoAntes: estadoAnterior,
+        estadoDespues: estadoNuevo,
+        corralOrigen: await this.nombreCorralActual(animal, lote),
+        motivo: motivoTexto,
+        user,
+      });
+    }
+    return this.animalJson(saved);
   }
 
   async removeAnimal(
@@ -293,17 +433,15 @@ export class LotesService {
   }
 
   /**
-   * Envía el animal a un corral de enfermería. Sin `idCorral`, usa la primera
-   * enfermería activa de la empresa. La ubicación "común" del animal sigue
-   * siendo la de su lote (derivada): esto sólo marca la excepción.
-   *
-   * Si el animal ya está en una enfermería y se indica otra `idCorral`, se
-   * reasigna entre enfermerías (drag & drop del mapa); con la misma, es no-op.
+   * Envía el animal a un corral de enfermería (o lo reasigna entre
+   * enfermerías). Requiere el motivo/enfermedad: el estado pasa a 'enfermo'
+   * y se registra el movimiento en el historial. Sin `idCorral`, usa la
+   * primera enfermería activa de la empresa.
    */
   async enviarEnfermeria(
     idLote: number,
     animalId: number,
-    idCorral: number | undefined,
+    dto: { idCorral?: number; motivo?: string; idMotivo?: number },
     user: any,
   ): Promise<any> {
     const lote = await this.getLoteVerificado(idLote, user);
@@ -316,14 +454,15 @@ export class LotesService {
     if (animal.estado === "muerto") {
       throw new BadRequestException("Un animal muerto no puede moverse.");
     }
-    if (animal.idCorralEnfermeria != null && !idCorral) {
+    if (animal.idCorralEnfermeria != null && !dto.idCorral) {
       throw new BadRequestException("El animal ya está en enfermería.");
     }
+    const motivoTexto = await this.resolverMotivo(dto, lote.idEmpresa, true);
 
     let destino: Corral | null = null;
-    if (idCorral) {
+    if (dto.idCorral) {
       const c = await this.corralRepository.findOne({
-        where: { id: idCorral },
+        where: { id: dto.idCorral },
       });
       if (
         !c ||
@@ -353,17 +492,36 @@ export class LotesService {
       return this.animalJson(animal);
     }
 
+    const origenNombre = await this.nombreCorralActual(animal, lote);
+    const estadoAnterior = animal.estado;
     animal.idCorralEnfermeria = destino.id;
-    return this.animalJson(await this.animalRepository.save(animal));
+    animal.estado = "enfermo";
+    const saved = await this.animalRepository.save(animal);
+
+    await this.registrarMovimiento({
+      idAnimal: saved.id,
+      idEmpresa: lote.idEmpresa,
+      tipo: "a_enfermeria",
+      estadoAntes: estadoAnterior,
+      estadoDespues: "enfermo",
+      corralOrigen: origenNombre,
+      corralDestino: destino.nombre,
+      motivo: motivoTexto,
+      user,
+    });
+    return this.animalJson(saved);
   }
 
   /**
-   * Trae el animal de enfermería: limpia la excepción y vuelve al corral
-   * ACTUAL de su lote por derivación (aunque el lote haya cambiado de corral).
+   * Trae el animal de enfermería: limpia la excepción (vuelve al corral
+   * ACTUAL de su lote por derivación) y aplica el estado de salida elegido
+   * ('sano' | 'muerto'). Si sale muerto, la causa es obligatoria. Registra
+   * el movimiento en el historial.
    */
   async traerDeEnfermeria(
     idLote: number,
     animalId: number,
+    dto: TraerEnfermeriaDto,
     user: any,
   ): Promise<any> {
     const lote = await this.getLoteVerificado(idLote, user);
@@ -376,16 +534,81 @@ export class LotesService {
     if (animal.idCorralEnfermeria == null) {
       throw new BadRequestException("El animal no está en enfermería.");
     }
+    if (dto.estado === "muerto" && !dto.motivo?.trim() && !dto.idMotivo) {
+      throw new BadRequestException(
+        "Indicá la causa del fallecimiento para dar el alta de enfermería",
+      );
+    }
+    const motivoTexto = await this.resolverMotivo(dto, lote.idEmpresa, false);
+
+    const origen = await this.corralRepository.findOne({
+      where: { id: animal.idCorralEnfermeria },
+    });
+    const estadoAnterior = animal.estado;
     animal.idCorralEnfermeria = null;
-    return this.animalJson(await this.animalRepository.save(animal));
+    animal.estado = dto.estado;
+    const saved = await this.animalRepository.save(animal);
+
+    await this.registrarMovimiento({
+      idAnimal: saved.id,
+      idEmpresa: lote.idEmpresa,
+      tipo: "de_enfermeria",
+      estadoAntes: estadoAnterior,
+      estadoDespues: dto.estado,
+      corralOrigen: origen?.nombre ?? null,
+      corralDestino: await this.nombreCorralDeLote(lote),
+      motivo: motivoTexto,
+      user,
+    });
+    return this.animalJson(saved);
+  }
+
+  /** Historial de movimientos del animal, por fecha descendente. */
+  async getMovimientos(idLote: number, animalId: number, user: any) {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const animal = await this.animalRepository.findOne({
+      where: { id: animalId, idLote: lote.id },
+    });
+    if (!animal) {
+      throw new NotFoundException("Animal no encontrado");
+    }
+    const movimientos = await this.movimientoRepository.find({
+      where: { idAnimal: animal.id },
+      order: { createdAt: "DESC", id: "DESC" },
+    });
+    const usuarios = await this.cache.getOrLoadUsuarios();
+    const nombreByUid = new Map<string, string | null>(
+      usuarios.map((u) => [u.uid, u.nombreUsuario]),
+    );
+    return movimientos.map((m) => ({
+      id: m.id,
+      tipo: m.tipo,
+      estadoAntes: m.estadoAntes,
+      estadoDespues: m.estadoDespues,
+      corralOrigen: m.corralOrigen,
+      corralDestino: m.corralDestino,
+      motivo: m.motivo,
+      idUsuario: m.idUsuario,
+      usuarioNombre: m.idUsuario
+        ? (nombreByUid.get(m.idUsuario) ?? null)
+        : null,
+      fecha: m.createdAt,
+    }));
   }
 
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
-  private async getLoteVerificado(id: number, user: any): Promise<Lote> {
-    const lote = await this.loteRepository.findOne({ where: { id } });
+  private async getLoteVerificado(
+    id: number,
+    user: any,
+    relations?: string[],
+  ): Promise<Lote> {
+    const lote = await this.loteRepository.findOne({
+      where: { id },
+      relations,
+    });
     if (!lote) {
       throw new NotFoundException("Lote no encontrado");
     }
@@ -443,19 +666,117 @@ export class LotesService {
     return PALETA_LOTE[n % PALETA_LOTE.length];
   }
 
-  /** Valida que `idCliente` sea un cliente (rol cliente) de la empresa. */
-  private async validarClienteDeEmpresa(idCliente: string, idEmpresa: number) {
+  /**
+   * Valida que el lote pueda asociarse a `idTitular`: un CLIENTE vinculado a
+   * la empresa o el ANFITRIÓN de la empresa (animales propios).
+   */
+  private async validarTitularDeEmpresa(idCliente: string, idEmpresa: number) {
     const todos = await this.cache.getOrLoadUsuarios();
-    const cliente = todos.find((u) => u.uid === idCliente);
+    const titular = todos.find((u) => u.uid === idCliente);
     if (
-      !cliente ||
-      !cliente.roles.includes(Roles.CLIENTE) ||
-      !cliente.idEmpresas.includes(idEmpresa)
+      !titular ||
+      !(
+        titular.roles.includes(Roles.CLIENTE) ||
+        titular.roles.includes(Roles.ANFITRION)
+      ) ||
+      !titular.idEmpresas.includes(idEmpresa)
     ) {
       throw new BadRequestException(
-        "El cliente indicado no es cliente de tu empresa",
+        "El titular indicado no es cliente ni anfitrión de tu empresa",
       );
     }
+  }
+
+  /**
+   * Resuelve el motivo de un movimiento: por `idMotivo` (validado contra el
+   * catálogo) o por texto `motivo` (busca/crea el valor en el catálogo).
+   * Devuelve el nombre a guardar como snapshot.
+   */
+  private async resolverMotivo(
+    dto: { motivo?: string; idMotivo?: number },
+    idEmpresa: number,
+    obligatorio: boolean,
+  ): Promise<string | null> {
+    if (dto.idMotivo) {
+      const m = await this.catalogos.validarValor(
+        "motivo",
+        dto.idMotivo,
+        idEmpresa,
+        "motivo",
+      );
+      return m.nombre;
+    }
+    if (dto.motivo?.trim()) {
+      const m = await this.catalogos.buscarOcrear(
+        "motivo",
+        dto.motivo,
+        idEmpresa,
+      );
+      return m.nombre;
+    }
+    if (obligatorio) {
+      throw new BadRequestException(
+        "Indicá la razón o enfermedad del movimiento",
+      );
+    }
+    return null;
+  }
+
+  /** Registra un movimiento sanitario en el historial del animal. */
+  private async registrarMovimiento(params: {
+    idAnimal: number;
+    idEmpresa: number;
+    tipo: string;
+    estadoAntes?: string | null;
+    estadoDespues?: string | null;
+    corralOrigen?: string | null;
+    corralDestino?: string | null;
+    motivo?: string | null;
+    user: any;
+  }) {
+    let idMotivo: number | null = null;
+    let motivoNombre: string | null = null;
+    if (params.motivo?.trim()) {
+      const m = await this.catalogos.buscarOcrear(
+        "motivo",
+        params.motivo,
+        params.idEmpresa,
+      );
+      idMotivo = m.id;
+      motivoNombre = m.nombre;
+    }
+    await this.movimientoRepository.save(
+      this.movimientoRepository.create({
+        idAnimal: params.idAnimal,
+        tipo: params.tipo,
+        estadoAntes: params.estadoAntes ?? null,
+        estadoDespues: params.estadoDespues ?? null,
+        corralOrigen: params.corralOrigen ?? null,
+        corralDestino: params.corralDestino ?? null,
+        idMotivo,
+        motivo: motivoNombre,
+        idUsuario: params.user?.id ?? null,
+      }),
+    );
+  }
+
+  /** Nombre del corral donde está el animal AHORA (enfermería o el del lote). */
+  private async nombreCorralActual(
+    animal: Animal,
+    lote: Lote,
+  ): Promise<string | null> {
+    const id = animal.idCorralEnfermeria ?? lote.idCorral;
+    return this.nombreCorral(id);
+  }
+
+  private async nombreCorralDeLote(lote: Lote): Promise<string | null> {
+    return this.nombreCorral(lote.idCorral);
+  }
+
+  private async nombreCorral(id: number | null): Promise<string | null> {
+    if (id == null) return null;
+    const c = await this.corralRepository.findOne({ where: { id } });
+    return c?.nombre ?? null;
   }
 
   private async nombreDeCliente(
@@ -494,6 +815,10 @@ export class LotesService {
       fecha: l.fecha,
       idCliente: l.idCliente,
       nombreCliente: l.idCliente ? (nameByUid.get(l.idCliente) ?? null) : null,
+      idProveedor: l.idProveedor,
+      nombreProveedor: l.proveedor?.nombre ?? null,
+      idLugarOrigen: l.idLugarOrigen,
+      nombreLugarOrigen: l.lugarOrigen?.nombre ?? null,
       idCorral: l.idCorral,
       corralNombre: l.corral?.nombre ?? null,
       color: l.color,
@@ -551,10 +876,18 @@ export class LotesService {
     return Math.round((b.getTime() - a.getTime()) / 86400000);
   }
 
-  /** Normaliza decimales de pg (vienen como string) a number. */
+  /**
+   * Normaliza decimales de pg (vienen como string) a number y aplana las
+   * relaciones de catálogo (raza/categoría) a sus nombres.
+   */
   private animalJson(a: Animal): any {
+    const { raza, categoria, ...rest } = a as any;
+    delete rest.lote;
+    delete rest.corralEnfermeria;
     return {
-      ...a,
+      ...rest,
+      razaNombre: raza?.nombre ?? null,
+      categoriaNombre: categoria?.nombre ?? null,
       pesoInicial: a.pesoInicial != null ? Number(a.pesoInicial) : null,
       desbasteIni: Number(a.desbasteIni),
       pesoNetoIni: a.pesoNetoIni != null ? Number(a.pesoNetoIni) : null,

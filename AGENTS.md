@@ -54,6 +54,20 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
    un cliente sólo ve los corrales de SUS lotes y en las enfermerías únicamente animales de sus
    lotes (la vista `/corrales` completa y `/corrales/enfermerias` están bloqueadas por `@Roles`).
    Mantener esto al ampliar.
+9. **Catálogos multitenant** (`raza`, `categoria`, `proveedor`, `lugar_origen`, `motivo`):
+   `id_empresa` NULL = valor GLOBAL (seed de la migración 004: razas y categorías por defecto);
+   con valor = creado desde los formularios de esa empresa. Unicidad por
+   (COALESCE(id_empresa,0), LOWER(nombre)). El módulo **catalogos** resuelve lectura
+   (globales + empresa actual, `lectura:lote`), alta desde formularios (`escritura:lote`,
+   asociada a la empresa, idempotente en lowercase) y las vistas admin de sys-admin
+   (`/catalogos/:tipo/admin`). Un lote puede asociarse a un **cliente o al anfitrión** de la
+   empresa (`GET /clientes/titulares`; `validarTitularDeEmpresa` en `LotesService`).
+10. **Movimientos sanitarios** (`animal_movimiento`): historial de envíos a enfermería
+    (`a_enfermeria`, el estado pasa a 'enfermo' y el motivo es obligatorio), altas
+    (`de_enfermeria`, pide estado 'sano'|'muerto' y causa obligatoria si es muerto) y cambios
+    de estado desde la grilla (`cambio_estado`, motivo obligatorio al pasar a enfermo/muerto).
+    El motivo se resuelve/crea en el catálogo (`resolverMotivo`) y se guarda también como
+    snapshot de texto junto a los nombres de corral (el historial no se deforma).
 
 ## Módulos
 
@@ -62,15 +76,20 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 - **cache**: `FirestoreCacheService` + `POST /cache/invalidate`.
 - **empresas**: `GET /empresas` · `GET /empresas/me` · `POST /empresas` (el anfitrión crea su
   única empresa; el rol ya lo asignó sys-admin) · `PATCH /empresas/:id` (nombre/dirección/teléfono).
-- **clientes**: `GET /clientes` · `GET /clientes/operarios` · `GET /clientes/candidatos` ·
+- **clientes**: `GET /clientes` · `GET /clientes/titulares` (clientes + anfitrión: dueños
+  posibles de un lote) · `GET /clientes/operarios` · `GET /clientes/candidatos` ·
   `POST /clientes { uid, rol: 'cliente'|'operario' }` (vincular) ·
   `PATCH /clientes/:uid/rol` (promover a operario) · `DELETE /clientes/:uid` (desvincular).
 - **lotes** (partidas de animales): `GET /lotes` · `POST /lotes` (nombre, fecha, idCliente,
-  idCorral, color; sin color → auto de la paleta) · `GET /lotes/:id` (con animales) ·
-  `PATCH /lotes/:id` · `POST /lotes/:id/animales` · `PATCH /lotes/:id/animales/:animalId`
-  (incluye `estado`: sano|enfermo|muerto) · `DELETE /lotes/:id/animales/:animalId` ·
-  `POST/DELETE /lotes/:id/animales/:animalId/enfermeria` (toggle de enfermería).
-  Un **cliente** sólo ve sus propios lotes (`id_cliente = uid`).
+  idProveedor, idLugarOrigen, idCorral, color; sin color → auto de la paleta) ·
+  `GET /lotes/:id` (con animales, incl. raza/categoría) · `PATCH /lotes/:id` ·
+  `POST /lotes/:id/animales` (incl. `idRaza`/`idCategoria`) ·
+  `PATCH /lotes/:id/animales/:animalId` (incluye `estado` + `idMotivo`/`motivo` para el
+  historial) · `DELETE /lotes/:id/animales/:animalId` ·
+  `POST /lotes/:id/animales/:animalId/enfermeria` (motivo obligatorio → estado 'enfermo') ·
+  `DELETE .../enfermeria` (body: estado 'sano'|'muerto' + causa opcional/obligatoria) ·
+  `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
+  de la empresa. Un **cliente** sólo ve sus propias partidas (`id_cliente = uid`).
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteId` del ocupante
   para validar drag & drop) ·   `GET /corrales/enfermerias` (picker) · `POST /corrales` ·
@@ -81,6 +100,12 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 - **usuarios**: `POST /usuarios/bootstrap` (sin rol, pendiente) · `GET /usuarios/candidatos` ·
   `PATCH /usuarios/:uid/rol` (sys-admin asigna anfitrión/operario/cliente) ·
   `PATCH /usuarios/:uid/nombre|celular`.
+- **catalogos** (raza · categoria · proveedor · lugar_origen · motivo):
+  `GET /catalogos/:tipo` (globales + mi empresa, `lectura:lote`) ·
+  `POST /catalogos/:tipo { nombre }` (alta asociada a mi empresa, `escritura:lote`, idempotente
+  en lowercase) · `GET /catalogos/:tipo/admin?scope=todas|global|empresa&idEmpresa=` y
+  `POST /catalogos/:tipo/admin { nombre, idEmpresa|null }` (sólo sys-admin; `idEmpresa` null =
+  global). Ver reglas 9 y 10.
 
 ## Convenciones
 

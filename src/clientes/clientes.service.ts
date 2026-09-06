@@ -20,7 +20,7 @@ export interface ClienteVinculado {
   celular: string | null;
   roles: string[];
   rol: string | null;
-  vinculadoDesde: Date;
+  vinculadoDesde: Date | null;
 }
 
 @Injectable()
@@ -73,6 +73,40 @@ export class ClientesService {
         vinculadoDesde: f.createdAt,
       };
     });
+  }
+
+  /**
+   * Titulares posibles de un lote: los clientes vinculados a la empresa + el
+   * anfitrión de la empresa (un anfitrión puede tener animales propios).
+   */
+  async findAllTitulares(user: any): Promise<ClienteVinculado[]> {
+    const titulares = await this.findAll(user);
+    const empresaId = user.currentEmpresaId;
+    if (!empresaId) return titulares;
+
+    const yaIncluidos = new Set(titulares.map((t) => t.uid));
+    const todos = await this.cache.getOrLoadUsuarios();
+    const anfitriones = todos
+      .filter(
+        (u) =>
+          u.roles.includes(Roles.ANFITRION) &&
+          u.idEmpresas.includes(empresaId) &&
+          !yaIncluidos.has(u.uid),
+      )
+      .map((u) => ({
+        uid: u.uid,
+        email: u.email,
+        nombreUsuario: u.nombreUsuario,
+        photoURL: u.photoURL,
+        celular: u.celular,
+        roles: u.roles,
+        rol: Roles.ANFITRION,
+        vinculadoDesde: null,
+      }));
+
+    return [...titulares, ...anfitriones].sort((a, b) =>
+      (a.nombreUsuario || "").localeCompare(b.nombreUsuario || "", "es"),
+    );
   }
 
   /**

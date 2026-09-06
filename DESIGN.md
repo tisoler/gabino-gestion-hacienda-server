@@ -68,8 +68,9 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   (int, informativa), `descripcion`, `activo`, timestamps. Los comunes alojan UN lote activo
   (estado libre/ocupado DERIVADO de `lote.id_corral`); las enfermerías no tienen estado y
   reciben animales de varios lotes.
-- `lote` — `id`, `id_empresa FK`, `id_cliente VARCHAR(128)` (dueño, opcional), `nombre`,
-  `descripcion`, `fecha`, `id_corral FK→corral` (común que lo hospeda), `color` (hex, para
+- `lote` — `id`, `id_empresa FK`, `id_cliente VARCHAR(128)` (dueño: **cliente o anfitrión** de
+  la empresa, opcional), `nombre`, `descripcion`, `fecha`, `id_corral FK→corral` (común que lo
+  hospeda), `id_proveedor`/`id_lugar_origen` (FKs a catálogos, nullable), `color` (hex, para
   el mapa; auto-asignado de `PALETA_LOTE` al crear si no viene), `activo`, timestamps.
 - `animal` — `id`, `id_lote FK`, y los campos de la planilla PESAJE ING-EGR (fila 5):
   `n_animal`, `sexo`, `pelaje`, `fecha_pesaje_ini`, `peso_inicial`, `desbaste_ini`,
@@ -77,7 +78,21 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   `diferencia`, `aum_diario`, `observaciones`. Los netos/diferencia/aum diario se calculan
   server-side (`LotesService.computar`). Además `estado` (`sano`|`enfermo`|`muerto`) e
   `id_corral_enfermeria` (nullable): sólo marca la excepción de enfermería; la ubicación
-  efectiva del animal es `id_corral_enfermeria ?? lote.id_corral` (derivada).
+  efectiva del animal es `id_corral_enfermeria ?? lote.id_corral` (derivada). Y `id_raza`/
+  `id_categoria` (FKs a los catálogos, nullable).
+- **Catálogos multitenant** (`raza`, `categoria`, `proveedor`, `lugar_origen`, `motivo`) —
+  `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas; con valor =
+  creado por/para esa empresa), `nombre`, timestamps. Unicidad por
+  `(COALESCE(id_empresa,0), LOWER(nombre))`. Seed global (migración 004): razas Braford,
+  Brangus, Hereford, Aberdeen-Angus, Cruza europea; categorías Ternero/a, Novillo/Vaquillona,
+  Toro/Vaca, MEJ. Los autocomplete de la UI leen globales+empresa (`lectura:lote`) y, si no
+  coincide, agregan asociado a la empresa (`escritura:lote`). Sys-admin tiene vistas de
+  Razas/Categorías (`/catalogos/:tipo/admin`).
+- `animal_movimiento` — historial sanitario: `id`, `id_animal` FK, `tipo`
+  (`a_enfermeria`|`de_enfermeria`|`cambio_estado`), `estado_antes`/`estado_despues`,
+  `corral_origen`/`corral_destino` (snapshot de nombre), `id_motivo` FK + `motivo` (snapshot de
+  texto), `id_usuario` (UID), `created_at`. Se registra en los movimientos de enfermería y en
+  los cambios de estado (motivo obligatorio al pasar a enfermo/muerto).
 
 Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 
