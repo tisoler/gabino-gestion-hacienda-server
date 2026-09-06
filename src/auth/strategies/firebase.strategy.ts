@@ -10,7 +10,7 @@ import { FirestoreCacheService } from "../../cache/firestore-cache.service";
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount as any),
-    projectId: process.env.FIREBASE_PROJECT_ID || "gabino-gestion-hacienda",
+    projectId: "gabino-gestion-hacienda",
   });
 }
 

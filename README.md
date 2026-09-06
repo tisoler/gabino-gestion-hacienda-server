@@ -17,7 +17,6 @@ pnpm test             # jest
 - `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` — conexión PostgreSQL.
 - `PORT` — puerto (default `3055`).
 - `CACHE_AUTH_TTL`, `CACHE_USUARIOS_TTL` — TTL del cache de Firestore en milisegundos (default 4h).
-- `FIREBASE_PROJECT_ID` — project id de Firebase (default `gabino-hacienda`).
 - `firebase-service-account.json` — credenciales del service account en la raíz del proyecto.
 
 ## Base de datos y migraciones
