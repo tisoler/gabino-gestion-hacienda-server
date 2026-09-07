@@ -20,6 +20,7 @@ import {
   Categoria,
   LugarOrigen,
   Motivo,
+  Pelaje,
   Proveedor,
   Raza,
 } from "./entities/catalogo.entity";
@@ -47,6 +48,7 @@ import {
           AnimalMovimiento,
           Raza,
           Categoria,
+          Pelaje,
           Proveedor,
           LugarOrigen,
           Motivo,

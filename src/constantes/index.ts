@@ -12,6 +12,7 @@ export const Roles = {
 export const CATALOGO_TIPOS = [
   "raza",
   "categoria",
+  "pelaje",
   "proveedor",
   "lugar_origen",
   "motivo",

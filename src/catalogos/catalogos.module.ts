@@ -4,6 +4,7 @@ import {
   Categoria,
   LugarOrigen,
   Motivo,
+  Pelaje,
   Proveedor,
   Raza,
 } from "../entities/catalogo.entity";
@@ -16,6 +17,7 @@ import { CatalogosController } from "./catalogos.controller";
     TypeOrmModule.forFeature([
       Raza,
       Categoria,
+      Pelaje,
       Proveedor,
       LugarOrigen,
       Motivo,

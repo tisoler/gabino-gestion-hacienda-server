@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
 import { Corral } from "../entities/corral.entity";
@@ -15,6 +15,7 @@ import { Roles, PALETA_LOTE } from "src/constantes";
 import { CreateLoteDto } from "./dto/create-lote.dto";
 import { UpdateLoteDto } from "./dto/update-lote.dto";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
+import { CreateAnimalesMasivaDto } from "./dto/create-animales-masiva.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
@@ -105,7 +106,7 @@ export class LotesService {
     ]);
     const animales = await this.animalRepository.find({
       where: { idLote: id },
-      relations: ["raza", "categoria"],
+      relations: ["raza", "categoria", "pelaje"],
       order: { nAnimal: "ASC", id: "ASC" },
     });
     const nombreCliente = await this.nombreDeCliente(lote.idCliente);
@@ -171,11 +172,7 @@ export class LotesService {
       );
     }
     if (createLoteDto.idCorral != null) {
-      await this.validarCorralComunLibre(
-        createLoteDto.idCorral,
-        idEmpresa,
-        undefined,
-      );
+      await this.validarCorralComun(createLoteDto.idCorral, idEmpresa);
     }
 
     const color = createLoteDto.color ?? (await this.siguienteColor(idEmpresa));
@@ -243,11 +240,7 @@ export class LotesService {
     }
     if (updateLoteDto.idCorral !== undefined) {
       if (updateLoteDto.idCorral) {
-        await this.validarCorralComunLibre(
-          updateLoteDto.idCorral,
-          lote.idEmpresa,
-          lote.id,
-        );
+        await this.validarCorralComun(updateLoteDto.idCorral, lote.idEmpresa);
         lote.idCorral = updateLoteDto.idCorral;
       } else {
         lote.idCorral = null;
@@ -269,6 +262,17 @@ export class LotesService {
     user: any,
   ): Promise<any> {
     const lote = await this.getLoteVerificado(idLote, user);
+    const caravana = dto.caravana?.trim();
+    if (!caravana) {
+      throw new BadRequestException("La caravana es obligatoria");
+    }
+    await this.validarCaravanaLibre(lote.id, caravana, undefined);
+    await this.catalogos.validarValor(
+      "pelaje",
+      dto.idPelaje,
+      lote.idEmpresa,
+      "pelaje",
+    );
     if (dto.idRaza != null) {
       await this.catalogos.validarValor(
         "raza",
@@ -291,11 +295,13 @@ export class LotesService {
         "Indicá la razón o enfermedad al dar de alta un animal enfermo o muerto",
       );
     }
+    const nAnimal =
+      dto.nAnimal ?? (await this.siguienteNAnimal(lote.id, undefined));
     const base = {
       idLote: lote.id,
-      nAnimal: dto.nAnimal ?? null,
-      sexo: dto.sexo ?? null,
-      pelaje: dto.pelaje ?? null,
+      nAnimal,
+      caravana,
+      idPelaje: dto.idPelaje,
       idRaza: dto.idRaza ?? null,
       idCategoria: dto.idCategoria ?? null,
       fechaPesajeIni: this.aDate(dto.fechaPesajeIni),
@@ -322,7 +328,102 @@ export class LotesService {
         user,
       });
     }
-    return this.animalJson(saved);
+    return this.animalJson(await this.cargarAnimal(saved.id));
+  }
+
+  /**
+   * Carga masiva de animales al lote: raza (opcional), pelaje (requerido) y
+   * categoría (requerida, de la que se infiere el sexo) compartidos + fechas/
+   * pesos/desbastes/observaciones opcionales. `animales` trae las caravanas
+   * (y N° opcional) de cada fila del preview. Se auto-numera desde el último
+   * N° del lote. Todo en una sola transacción.
+   */
+  async addAnimalesMasiva(
+    idLote: number,
+    dto: CreateAnimalesMasivaDto,
+    user: any,
+  ): Promise<{ creados: number; animales: any[] }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    if (dto.animales.length !== dto.cantidad) {
+      throw new BadRequestException(
+        "La cantidad no coincide con las caravanas ingresadas",
+      );
+    }
+    await this.catalogos.validarValor(
+      "pelaje",
+      dto.idPelaje,
+      lote.idEmpresa,
+      "pelaje",
+    );
+    await this.catalogos.validarValor(
+      "categoria",
+      dto.idCategoria,
+      lote.idEmpresa,
+      "categoría",
+    );
+    if (dto.idRaza != null) {
+      await this.catalogos.validarValor(
+        "raza",
+        dto.idRaza,
+        lote.idEmpresa,
+        "raza",
+      );
+    }
+
+    // Caravanas: no vacías ni duplicadas dentro del envío.
+    const seen = new Set<string>();
+    for (const item of dto.animales) {
+      const c = item.caravana?.trim();
+      if (!c) {
+        throw new BadRequestException("Todas las caravanas son obligatorias");
+      }
+      const key = c.toLowerCase();
+      if (seen.has(key)) {
+        throw new BadRequestException(`Caravana duplicada: "${c}"`);
+      }
+      seen.add(key);
+      await this.validarCaravanaLibre(lote.id, c, undefined);
+    }
+
+    const ids = await this.animalRepository.manager.transaction(async (em) => {
+      const repo = em.getRepository(Animal);
+      let next = await this.siguienteNAnimal(lote.id, undefined, em);
+      const creados: number[] = [];
+      for (const item of dto.animales) {
+        const nAnimal = item.nAnimal ?? next++;
+        const base = {
+          idLote: lote.id,
+          nAnimal,
+          caravana: item.caravana.trim(),
+          idPelaje: dto.idPelaje,
+          idRaza: dto.idRaza ?? null,
+          idCategoria: dto.idCategoria,
+          fechaPesajeIni: this.aDate(dto.fechaPesajeIni),
+          pesoInicial: dto.pesoInicial ?? null,
+          desbasteIni: dto.desbasteIni ?? 0,
+          fechaPesajeFin: this.aDate(dto.fechaPesajeFin),
+          pesoFinal: dto.pesoFinal ?? null,
+          desbasteFin: dto.desbasteFin ?? 0,
+          observaciones: dto.observaciones ?? null,
+          estado: "sano",
+          idCorralEnfermeria: null,
+        };
+        const computed = this.computar(base as any);
+        const saved = await repo.save(repo.create({ ...base, ...computed }));
+        creados.push(saved.id);
+      }
+      return creados;
+    });
+
+    const animales = await this.animalRepository.find({
+      where: { id: In(ids) },
+      relations: ["raza", "categoria", "pelaje"],
+      order: { nAnimal: "ASC" },
+    });
+    return {
+      creados: animales.length,
+      animales: animales.map((a) => this.animalJson(a)),
+    };
   }
 
   async updateAnimal(
@@ -340,8 +441,25 @@ export class LotesService {
     }
 
     if (dto.nAnimal !== undefined) animal.nAnimal = dto.nAnimal;
-    if (dto.sexo !== undefined) animal.sexo = dto.sexo;
-    if (dto.pelaje !== undefined) animal.pelaje = dto.pelaje;
+    if (dto.caravana !== undefined) {
+      const caravana = dto.caravana?.trim();
+      if (!caravana) {
+        throw new BadRequestException("La caravana es obligatoria");
+      }
+      await this.validarCaravanaLibre(lote.id, caravana, animal.id);
+      animal.caravana = caravana;
+    }
+    if (dto.idPelaje !== undefined) {
+      if (dto.idPelaje != null) {
+        await this.catalogos.validarValor(
+          "pelaje",
+          dto.idPelaje,
+          lote.idEmpresa,
+          "pelaje",
+        );
+      }
+      animal.idPelaje = dto.idPelaje ?? null;
+    }
     if (dto.idRaza !== undefined) {
       if (dto.idRaza != null) {
         await this.catalogos.validarValor(
@@ -413,7 +531,7 @@ export class LotesService {
         user,
       });
     }
-    return this.animalJson(saved);
+    return this.animalJson(await this.cargarAnimal(saved.id));
   }
 
   async removeAnimal(
@@ -629,14 +747,11 @@ export class LotesService {
   }
 
   /**
-   * Valida que el lote pueda asignarse a `idCorral`: común, activo, de la
-   * empresa, y libre (o ya ocupado por este mismo lote).
+   * Valida que el lote pueda asignarse a `idCorral`: corral COMÚN, activo y de
+   * la empresa. Un común puede compartir VARIOS lotes activos (ya no se exige
+   * que esté libre).
    */
-  private async validarCorralComunLibre(
-    idCorral: number,
-    idEmpresa: number,
-    loteIdActual?: number,
-  ) {
+  private async validarCorralComun(idCorral: number, idEmpresa: number) {
     const corral = await this.corralRepository.findOne({
       where: { id: idCorral },
     });
@@ -648,14 +763,6 @@ export class LotesService {
     ) {
       throw new BadRequestException(
         "El corral indicado no es un corral común disponible de tu empresa",
-      );
-    }
-    const ocupante = await this.loteRepository.findOne({
-      where: { idCorral, activo: true },
-    });
-    if (ocupante && ocupante.id !== loteIdActual) {
-      throw new BadRequestException(
-        `El corral "${corral.nombre}" está ocupado por el lote "${ocupante.nombre}". Liberalo primero.`,
       );
     }
   }
@@ -876,18 +983,66 @@ export class LotesService {
     return Math.round((b.getTime() - a.getTime()) / 86400000);
   }
 
+  /** Recarga un animal con sus relaciones de catálogo (para responder). */
+  private cargarAnimal(id: number): Promise<Animal> {
+    return this.animalRepository.findOneOrFail({
+      where: { id },
+      relations: ["raza", "categoria", "pelaje"],
+    });
+  }
+
+  /** Próximo N° de animal del lote (máximo actual + 1). */
+  private async siguienteNAnimal(
+    idLote: number,
+    _excluirAnimalId?: number,
+    em?: import("typeorm").EntityManager,
+  ): Promise<number> {
+    const repo = em ? em.getRepository(Animal) : this.animalRepository;
+    const row = await repo
+      .createQueryBuilder("a")
+      .select("COALESCE(MAX(a.n_animal), 0)", "max")
+      .where("a.id_lote = :lote", { lote: idLote })
+      .getRawOne();
+    return Number(row?.max ?? 0) + 1;
+  }
+
+  /** La caravana no puede repetirse dentro del lote (case-insensitive). */
+  private async validarCaravanaLibre(
+    idLote: number,
+    caravana: string,
+    animalIdActual?: number,
+  ) {
+    const qb = this.animalRepository
+      .createQueryBuilder("a")
+      .where("a.id_lote = :lote", { lote: idLote })
+      .andWhere("LOWER(a.caravana) = LOWER(:c)", { c: caravana });
+    if (animalIdActual) {
+      qb.andWhere("a.id != :aid", { aid: animalIdActual });
+    }
+    const choque = await qb.getOne();
+    if (choque) {
+      throw new BadRequestException(
+        `La caravana "${caravana}" ya existe en este lote`,
+      );
+    }
+  }
+
   /**
    * Normaliza decimales de pg (vienen como string) a number y aplana las
-   * relaciones de catálogo (raza/categoría) a sus nombres.
+   * relaciones de catálogo (raza/categoría/pelaje) a sus nombres. El `sexo`
+   * se INFIERE de la categoría (ya no es columna del animal).
    */
   private animalJson(a: Animal): any {
-    const { raza, categoria, ...rest } = a as any;
+    const { raza, categoria, pelaje, ...rest } = a as any;
     delete rest.lote;
     delete rest.corralEnfermeria;
     return {
       ...rest,
+      sexo: categoria?.sexo ?? null,
       razaNombre: raza?.nombre ?? null,
       categoriaNombre: categoria?.nombre ?? null,
+      categoriaSexo: categoria?.sexo ?? null,
+      pelajeNombre: pelaje?.nombre ?? null,
       pesoInicial: a.pesoInicial != null ? Number(a.pesoInicial) : null,
       desbasteIni: Number(a.desbasteIni),
       pesoNetoIni: a.pesoNetoIni != null ? Number(a.pesoNetoIni) : null,

@@ -1,44 +1,53 @@
+import { Type } from "class-transformer";
 import {
+  ArrayNotEmpty,
+  IsArray,
   IsDateString,
-  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
-  ValidateIf,
+  ValidateNested,
 } from "class-validator";
 
-export class CreateAnimalDto {
-  @IsOptional()
-  @IsInt()
-  nAnimal?: number;
-
+/** Fila del preview de la carga masiva: caravana obligatoria + N° opcional. */
+export class AnimalMasivoItemDto {
   @IsString()
   @IsNotEmpty({ message: "La caravana es obligatoria" })
   @MaxLength(50)
   caravana: string;
 
-  /** Catálogo `pelaje` (global o de la empresa). Requerido. */
+  /** Si no viene, se autocomplea desde el último N° del lote. */
+  @IsOptional()
+  @IsInt()
+  nAnimal?: number;
+}
+
+export class CreateAnimalesMasivaDto {
+  /** Catálogo `raza` (opcional). */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  idRaza?: number;
+
+  /** Catálogo `pelaje` (requerido). */
   @IsInt()
   @Min(1)
   idPelaje: number;
 
-  /** Catálogo `raza` (global o de la empresa). Opcional. */
-  @IsOptional()
-  @ValidateIf((_o, v) => v !== null)
+  /** Catálogo `categoria` (requerido; el sexo se infiere). */
   @IsInt()
   @Min(1)
-  idRaza?: number | null;
+  idCategoria: number;
 
-  /** Catálogo `categoria` (global o de la empresa). El sexo se infiere. */
-  @IsOptional()
-  @ValidateIf((_o, v) => v !== null)
   @IsInt()
   @Min(1)
-  idCategoria?: number | null;
+  @Max(500)
+  cantidad: number;
 
   @IsOptional()
   @IsDateString()
@@ -69,13 +78,9 @@ export class CreateAnimalDto {
   @MaxLength(2000)
   observaciones?: string;
 
-  @IsOptional()
-  @IsIn(["sano", "enfermo", "muerto"])
-  estado?: string;
-
-  /** Motivo/causa (obligatorio si `estado` no es 'sano'). */
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  motivo?: string;
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => AnimalMasivoItemDto)
+  animales: AnimalMasivoItemDto[];
 }

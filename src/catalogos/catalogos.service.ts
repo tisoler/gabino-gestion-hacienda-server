@@ -4,18 +4,19 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { IsNull, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import {
   Categoria,
   CatalogoBase,
   LugarOrigen,
   Motivo,
+  Pelaje,
   Proveedor,
   Raza,
 } from "../entities/catalogo.entity";
 import { Empresa } from "../entities/empresa.entity";
-import { CATALOGO_TIPOS, type CatalogoTipo } from "src/constantes";
-import { Roles } from "src/constantes";
+import { CATALOGO_TIPOS, Roles, type CatalogoTipo } from "src/constantes";
+import { capitalizarNombre } from "../utils/nombres.util";
 
 export interface CatalogoItem {
   id: number;
@@ -23,6 +24,10 @@ export interface CatalogoItem {
   idEmpresa: number | null;
   /** true si es un valor global (id_empresa NULL, visible para todas). */
   global: boolean;
+  /** Sólo `categoria': 'MACHO' | 'HEMBRA' | null (indistinto). */
+  sexo?: string | null;
+  /** Sólo `pelaje': ids de las razas asociadas (vía raza_pelaje). */
+  razas?: number[];
 }
 
 export interface CatalogoAdminItem extends CatalogoItem {
@@ -30,9 +35,18 @@ export interface CatalogoAdminItem extends CatalogoItem {
   createdAt: Date;
 }
 
+export interface CrearCatalogoExtras {
+  /** sólo categoria */
+  sexo?: string | null;
+  /** sólo pelaje: asociar el pelaje a esta raza (global o de la empresa). */
+  idRaza?: number | null;
+}
+
+const SEXOS = ["MACHO", "HEMBRA"];
+
 /**
- * Catálogos multitenant (raza, categoría, proveedor, lugar de origen, motivo).
- * `id_empresa` NULL = valor GLOBAL; con valor = valor de esa empresa.
+ * Catálogos multitenant (raza, categoria, pelaje, proveedor, lugar_origen,
+ * motivo). `id_empresa` NULL = valor GLOBAL; con valor = valor de esa empresa.
  * La unicidad es por (empresa, nombre lowercase).
  */
 @Injectable()
@@ -40,8 +54,11 @@ export class CatalogosService {
   private readonly repos: Record<CatalogoTipo, Repository<CatalogoBase>>;
 
   constructor(
-    @InjectRepository(Raza) raza: Repository<Raza>,
+    @InjectRepository(Raza)
+    private readonly razaRepository: Repository<Raza>,
     @InjectRepository(Categoria) categoria: Repository<Categoria>,
+    @InjectRepository(Pelaje)
+    private readonly pelajeRepository: Repository<Pelaje>,
     @InjectRepository(Proveedor) proveedor: Repository<Proveedor>,
     @InjectRepository(LugarOrigen) lugarOrigen: Repository<LugarOrigen>,
     @InjectRepository(Motivo) motivo: Repository<Motivo>,
@@ -49,11 +66,12 @@ export class CatalogosService {
     private empresaRepository: Repository<Empresa>,
   ) {
     this.repos = {
-      raza: raza as Repository<CatalogoBase>,
-      categoria: categoria as Repository<CatalogoBase>,
-      proveedor: proveedor as Repository<CatalogoBase>,
-      lugar_origen: lugarOrigen as Repository<CatalogoBase>,
-      motivo: motivo as Repository<CatalogoBase>,
+      raza: razaRepository as unknown as Repository<CatalogoBase>,
+      categoria: categoria as unknown as Repository<CatalogoBase>,
+      pelaje: pelajeRepository as unknown as Repository<CatalogoBase>,
+      proveedor: proveedor as unknown as Repository<CatalogoBase>,
+      lugar_origen: lugarOrigen as unknown as Repository<CatalogoBase>,
+      motivo: motivo as unknown as Repository<CatalogoBase>,
     };
   }
 
@@ -69,42 +87,58 @@ export class CatalogosService {
   }
 
   private normalizar(nombre: string): string {
-    return nombre.trim().replace(/\s+/g, " ");
+    // Capitalize: primera letra de la primera palabra en mayúscula, el resto
+    // en minúscula (ver `capitalizarNombre`).
+    return capitalizarNombre(nombre);
   }
 
-  private item(c: CatalogoBase): CatalogoItem {
-    return {
+  private item(
+    c: CatalogoBase & Partial<Pelaje> & Partial<Categoria>,
+  ): CatalogoItem {
+    const base: CatalogoItem = {
       id: c.id,
       nombre: c.nombre,
       idEmpresa: c.idEmpresa ?? null,
       global: c.idEmpresa == null,
     };
+    if (c.sexo !== undefined) base.sexo = c.sexo ?? null;
+    if (c.razas !== undefined) base.razas = (c.razas ?? []).map((r) => r.id);
+    return base;
   }
 
   /**
    * Valores visibles para el usuario: los globales + los de su empresa actual.
    * (Sin empresa actual —p.ej. sys-admin sin `adminEmpresaId`— sólo globales.)
+   * En `pelaje` incluye los ids de las razas asociadas (para filtrar por raza).
    */
   async listarVisibles(tipo: CatalogoTipo, user: any): Promise<CatalogoItem[]> {
-    const where: any[] = [{ idEmpresa: IsNull() }];
     const empresaId = this.empresaActual(user);
-    if (empresaId) where.push({ idEmpresa: empresaId });
-    const filas = await this.repo(tipo).find({
-      where,
-      order: { nombre: "ASC" },
-    });
-    return filas.map((f) => this.item(f));
+    const qb = this.repo(tipo).createQueryBuilder("c");
+    if (empresaId) {
+      qb.where("c.id_empresa IS NULL OR c.id_empresa = :e", { e: empresaId });
+    } else {
+      qb.where("c.id_empresa IS NULL");
+    }
+    if (tipo === "pelaje") {
+      qb.leftJoinAndSelect("c.razas", "razas");
+    }
+    // Orden alfabético asc case-insensitive (coherente con la unicidad en lowercase).
+    qb.orderBy("LOWER(c.nombre)", "ASC");
+    const filas = await qb.getMany();
+    return filas.map((f) => this.item(f as any));
   }
 
   /**
    * Alta desde los formularios (usuario con escritura:lote): el valor queda
    * asociado a su empresa actual. Idempotente: si ya existe (global o de la
    * empresa, comparando en lowercase) devuelve el existente.
+   * Extras: `sexo` (categoria) e `idRaza` (pelaje → crea la asociación N:N).
    */
   async crear(
     tipo: CatalogoTipo,
     nombre: string,
     user: any,
+    extras?: CrearCatalogoExtras,
   ): Promise<CatalogoItem> {
     const empresaId = this.empresaActual(user);
     if (!empresaId) {
@@ -112,8 +146,11 @@ export class CatalogosService {
         "No tenés una empresa actual asociada para guardar el valor",
       );
     }
-    const fila = await this.buscarOcrear(tipo, nombre, empresaId);
-    return this.item(fila);
+    if (tipo === "pelaje" && extras?.idRaza) {
+      await this.validarValor("raza", extras.idRaza, empresaId, "raza");
+    }
+    const fila = await this.buscarOcrear(tipo, nombre, empresaId, extras);
+    return this.item(fila as any);
   }
 
   /** Busca por nombre (lowercase, global o de la empresa) o crea el valor. */
@@ -121,11 +158,13 @@ export class CatalogosService {
     tipo: CatalogoTipo,
     nombre: string,
     idEmpresa: number | null,
+    extras?: CrearCatalogoExtras,
   ): Promise<CatalogoBase> {
     const limpio = this.normalizar(nombre);
     if (!limpio) {
       throw new BadRequestException("El nombre es obligatorio");
     }
+    const sexo = this.validarSexo(tipo, extras?.sexo);
     const repo = this.repo(tipo);
     const qb = repo
       .createQueryBuilder("c")
@@ -137,12 +176,19 @@ export class CatalogosService {
         e: idEmpresa,
       });
     }
-    const existente = await qb.getOne();
-    if (existente) return existente;
-    return repo.save(repo.create({ idEmpresa, nombre: limpio }));
+    let fila = await qb.getOne();
+    if (!fila) {
+      const data: any = { idEmpresa, nombre: limpio };
+      if (tipo === "categoria" && sexo) data.sexo = sexo;
+      fila = await repo.save(repo.create(data as Partial<CatalogoBase>));
+    }
+    if (tipo === "pelaje" && extras?.idRaza) {
+      await this.asociarRaza(fila.id, extras.idRaza);
+    }
+    return fila;
   }
 
-  /** Validación de una FK de catálogo: debe ser global o de la empresa. */
+  /** Valida una FK de catálogo: debe ser global o de la empresa. */
   async validarValor(
     tipo: CatalogoTipo,
     id: number,
@@ -156,6 +202,31 @@ export class CatalogosService {
       );
     }
     return fila;
+  }
+
+  /** Asocia un pelaje a una raza (idempotente). */
+  private async asociarRaza(idPelaje: number, idRaza: number) {
+    const pelaje = await this.pelajeRepository.findOne({
+      where: { id: idPelaje },
+      relations: ["razas"],
+    });
+    if (!pelaje) return;
+    pelaje.razas = pelaje.razas ?? [];
+    if (pelaje.razas.some((r) => r.id === idRaza)) return;
+    const raza = await this.razaRepository.findOne({ where: { id: idRaza } });
+    if (!raza) return;
+    pelaje.razas = [...pelaje.razas, raza];
+    await this.pelajeRepository.save(pelaje);
+  }
+
+  private validarSexo(tipo: CatalogoTipo, sexo?: string | null): string | null {
+    if (tipo !== "categoria") return null;
+    if (sexo == null || sexo === "") return null;
+    const s = String(sexo).toUpperCase();
+    if (!SEXOS.includes(s)) {
+      throw new BadRequestException("El sexo debe ser MACHO o HEMBRA");
+    }
+    return s;
   }
 
   // ---------------------------------------------------------------------------
@@ -174,6 +245,9 @@ export class CatalogosService {
     const qb = this.repo(tipo)
       .createQueryBuilder("c")
       .leftJoinAndSelect("c.empresa", "empresa");
+    if (tipo === "pelaje") {
+      qb.leftJoinAndSelect("c.razas", "razas");
+    }
     if (scope === "global") {
       qb.where("c.id_empresa IS NULL");
     } else if (scope === "empresa") {
@@ -182,9 +256,9 @@ export class CatalogosService {
       }
       qb.where("c.id_empresa = :e", { e: idEmpresa });
     }
-    const filas = await qb.orderBy("c.nombre", "ASC").getMany();
+    const filas = await qb.orderBy("LOWER(c.nombre)", "ASC").getMany();
     return filas.map((c) => ({
-      ...this.item(c),
+      ...this.item(c as any),
       empresaNombre: c.empresa?.nombre ?? null,
       createdAt: c.createdAt,
     }));
@@ -195,6 +269,7 @@ export class CatalogosService {
     tipo: CatalogoTipo,
     nombre: string,
     idEmpresa: number | null | undefined,
+    extras?: CrearCatalogoExtras,
   ): Promise<CatalogoAdminItem> {
     let empresa: Empresa | null = null;
     if (idEmpresa != null) {
@@ -205,11 +280,12 @@ export class CatalogosService {
         throw new NotFoundException("Empresa no encontrada");
       }
     }
-    const repo = this.repo(tipo);
     const limpio = this.normalizar(nombre);
     if (!limpio) {
       throw new BadRequestException("El nombre es obligatorio");
     }
+    const sexo = this.validarSexo(tipo, extras?.sexo);
+    const repo = this.repo(tipo);
     const qb = repo
       .createQueryBuilder("c")
       .where("LOWER(c.nombre) = LOWER(:n)", { n: limpio });
@@ -218,14 +294,14 @@ export class CatalogosService {
     } else {
       qb.andWhere("c.id_empresa = :e", { e: idEmpresa });
     }
-    const existente = await qb.getOne();
-    const fila =
-      existente ??
-      (await repo.save(
-        repo.create({ idEmpresa: idEmpresa ?? null, nombre: limpio }),
-      ));
+    let fila = await qb.getOne();
+    if (!fila) {
+      const data: any = { idEmpresa: idEmpresa ?? null, nombre: limpio };
+      if (tipo === "categoria" && sexo) data.sexo = sexo;
+      fila = await repo.save(repo.create(data as Partial<CatalogoBase>));
+    }
     return {
-      ...this.item(fila),
+      ...this.item(fila as any),
       empresaNombre: fila.idEmpresa == null ? null : (empresa?.nombre ?? null),
       createdAt: fila.createdAt,
     };

@@ -44,7 +44,7 @@ export class CreateLoteDto {
   @Min(1)
   idLugarOrigen?: number | null;
 
-  /** Corral COMÚN de la empresa, libre (o el propio al editar). */
+  /** Corral COMÚN de la empresa (puede compartirse con otros lotes). */
   @IsOptional()
   @IsInt()
   @Min(1)

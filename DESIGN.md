@@ -65,29 +65,36 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   `UNIQUE(id_empresa, id_cliente)`. **Fuente de verdad** de la relación muchos-a-muchos
   empresa↔cliente. Espejada en el array `idEmpresas` del cliente en Firestore para auth.
 - `corral` — `id`, `id_empresa FK`, `nombre`, `tipo` (`comun`|`enfermeria`), `capacidad`
-  (int, informativa), `descripcion`, `activo`, timestamps. Los comunes alojan UN lote activo
-  (estado libre/ocupado DERIVADO de `lote.id_corral`); las enfermerías no tienen estado y
-  reciben animales de varios lotes.
+  (int, informativa), `descripcion`, `activo`, timestamps. Los comunes pueden alojar VARIOS
+  lotes activos (estado libre/ocupado DERIVADO de `lote.id_corral`); las enfermerías no tienen
+  estado y reciben animales de varios lotes.
 - `lote` — `id`, `id_empresa FK`, `id_cliente VARCHAR(128)` (dueño: **cliente o anfitrión** de
   la empresa, opcional), `nombre`, `descripcion`, `fecha`, `id_corral FK→corral` (común que lo
   hospeda), `id_proveedor`/`id_lugar_origen` (FKs a catálogos, nullable), `color` (hex, para
   el mapa; auto-asignado de `PALETA_LOTE` al crear si no viene), `activo`, timestamps.
 - `animal` — `id`, `id_lote FK`, y los campos de la planilla PESAJE ING-EGR (fila 5):
-  `n_animal`, `sexo`, `pelaje`, `fecha_pesaje_ini`, `peso_inicial`, `desbaste_ini`,
-  `peso_neto_ini`, `fecha_pesaje_fin`, `peso_final`, `desbaste_fin`, `peso_neto_fin`,
-  `diferencia`, `aum_diario`, `observaciones`. Los netos/diferencia/aum diario se calculan
-  server-side (`LotesService.computar`). Además `estado` (`sano`|`enfermo`|`muerto`) e
-  `id_corral_enfermeria` (nullable): sólo marca la excepción de enfermería; la ubicación
-  efectiva del animal es `id_corral_enfermeria ?? lote.id_corral` (derivada). Y `id_raza`/
-  `id_categoria` (FKs a los catálogos, nullable).
-- **Catálogos multitenant** (`raza`, `categoria`, `proveedor`, `lugar_origen`, `motivo`) —
-  `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas; con valor =
-  creado por/para esa empresa), `nombre`, timestamps. Unicidad por
+  `n_animal` (auto = último del lote + 1 si no viene), `caravana` (VARCHAR, requerida en la
+  app, única por lote), `id_pelaje` (FK al catálogo `pelaje`), `fecha_pesaje_ini`,
+  `peso_inicial`, `desbaste_ini`, `peso_neto_ini`, `fecha_pesaje_fin`, `peso_final`,
+  `desbaste_fin`, `peso_neto_fin`, `diferencia`, `aum_diario`, `observaciones`. Los
+  netos/diferencia/aum diario se calculan server-side (`LotesService.computar`). Además
+  `estado` (`sano`|`enfermo`|`muerto`) e `id_corral_enfermeria` (nullable): sólo marca la
+  excepción de enfermería; la ubicación efectiva del animal es `id_corral_enfermeria ??
+  lote.id_corral` (derivada). Y `id_raza`/`id_categoria` (FKs a los catálogos, nullable).
+  **El sexo ya no es columna del animal: se INFIERE de la categoría** (`categoria.sexo`).
+- **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
+  `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
+  con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
   `(COALESCE(id_empresa,0), LOWER(nombre))`. Seed global (migración 004): razas Braford,
   Brangus, Hereford, Aberdeen-Angus, Cruza europea; categorías Ternero/a, Novillo/Vaquillona,
   Toro/Vaca, MEJ. Los autocomplete de la UI leen globales+empresa (`lectura:lote`) y, si no
   coincide, agregan asociado a la empresa (`escritura:lote`). Sys-admin tiene vistas de
   Razas/Categorías (`/catalogos/:tipo/admin`).
+  - `categoria.sexo` (`MACHO`|`HEMBRA`|NULL=indistinto): al elegir categoría, la UI muestra el
+    sexo inferido. Al crear una categoría nueva el autocomplete ofrece elegir el sexo.
+  - `pelaje` + `raza_pelaje` (N:N): un pelaje puede ser **genérico** (sin raza) o común a 1 o N
+    razas. Al elegir raza, la UI filtra los pelajes de esa raza (+ genéricos) y, si al crear un
+    pelaje hay raza seleccionada, se asocia; si no, queda genérico.
 - `animal_movimiento` — historial sanitario: `id`, `id_animal` FK, `tipo`
   (`a_enfermeria`|`de_enfermeria`|`cambio_estado`), `estado_antes`/`estado_despues`,
   `corral_origen`/`corral_destino` (snapshot de nombre), `id_motivo` FK + `motivo` (snapshot de
@@ -147,9 +154,11 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
    Permisos: `lectura:lote` / `escritura:lote` (anfitrión y operario escriben; cliente lee
    sólo SUS lotes: `id_cliente = uid`).
 7. **Modelo de corrales derivado**: la ocupación del corral común es `lote.id_corral`
-   (1 lote activo por corral común → libre/ocupado se calcula, no se almacena). La enfermería
+   (VARIOS lotes activos pueden compartir un mismo común → libre/ocupado se calcula, no se
+   almacena; ocupado = existe al menos un lote activo). La enfermería
    es la única excepción por animal (`animal.id_corral_enfermeria`, nullable): al "traer" se
    limpia y el animal vuelve al corral ACTUAL de su lote por derivación — sin duplicar el
    corral en cada animal ni sincronizar cambios de lote. El toggle de enfermería manda al
    primer corral `enfermeria` activo (la UI ofrece picker si hay varios). La capacidad del
-   corral es informativa (no bloquea).
+   corral es informativa (no bloquea). En el mapa de drag & drop, un común expone `loteIds[]`
+   y "traer" es válido al soltar en un común que contenga el lote del animal.

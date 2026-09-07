@@ -9,12 +9,17 @@ import {
 } from "typeorm";
 import { Lote } from "./lote.entity";
 import { Corral } from "./corral.entity";
-import { Categoria, Raza } from "./catalogo.entity";
+import { Categoria, Pelaje, Raza } from "./catalogo.entity";
 
 /**
  * Animal (cabeza de ganado) dentro de un lote. Campos según la planilla
  * LOTE LEO VULICH.xlsx, hoja PESAJE ING-EGR (fila 5). Los valores netos,
  * diferencia y aumento diario se calculan server-side.
+ *
+ * `caravana` es la tara del animal (requerida en la app, única por lote). El
+ * **sexo ya no es columna**: se infiere de la categoría (`idCategoria` →
+ * `categoria.sexo`). `idPelaje`/`idRaza`/`idCategoria` apuntan a los catálogos
+ * (globales o de la empresa).
  *
  * Ubicación derivada: si `idCorralEnfermeria` está seteado, el animal está en
  * ese corral de enfermería; si es null, sigue el corral de su lote
@@ -45,11 +50,17 @@ export class Animal {
   @Column({ name: "n_animal", type: "int", nullable: true })
   nAnimal: number;
 
-  @Column({ type: "varchar", length: 20, nullable: true })
-  sexo: string;
-
+  /** Caravana (tara) del animal. Requerida en la app (DTO); nullable en BD
+   *  para no romper filas históricas. Única por lote. */
   @Column({ type: "varchar", length: 50, nullable: true })
-  pelaje: string;
+  caravana: string | null;
+
+  @Column({ name: "id_pelaje", type: "int", nullable: true })
+  idPelaje: number | null;
+
+  @ManyToOne(() => Pelaje, { nullable: true })
+  @JoinColumn({ name: "id_pelaje" })
+  pelaje: Pelaje;
 
   @Column({ name: "id_raza", type: "int", nullable: true })
   idRaza: number | null;

@@ -22,6 +22,7 @@ import { LotesService, LoteResumen } from "./lotes.service";
 import { CreateLoteDto } from "./dto/create-lote.dto";
 import { UpdateLoteDto } from "./dto/update-lote.dto";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
+import { CreateAnimalesMasivaDto } from "./dto/create-animales-masiva.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
@@ -96,6 +97,25 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.addAnimal(id, dto, req.user);
+  }
+
+  @Post(":id/animales/masiva")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary: "Carga masiva de animales al lote",
+    description:
+      "Crea N animales con raza (opcional), pelaje (requerido), categoría " +
+      "(requerida, infiere sexo) y pesajes/observaciones compartidos. Cada " +
+      "fila trae su caravana. El N° se autocompleta desde el último del lote. " +
+      "Todo en una transacción.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  addAnimalesMasiva(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CreateAnimalesMasivaDto,
+    @Request() req,
+  ) {
+    return this.lotesService.addAnimalesMasiva(id, dto, req.user);
   }
 
   @Patch(":id/animales/:animalId")

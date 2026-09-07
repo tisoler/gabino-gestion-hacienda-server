@@ -1,4 +1,5 @@
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -21,4 +22,10 @@ export class CreateCatalogoAdminDto {
   @IsInt()
   @Min(1)
   idEmpresa?: number | null;
+
+  /** Sólo `categoria': sexo ('MACHO' | 'HEMBRA' | null=indistinto). */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null && v !== "")
+  @IsIn(["MACHO", "HEMBRA"])
+  sexo?: string | null;
 }

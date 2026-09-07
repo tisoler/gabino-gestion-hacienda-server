@@ -40,7 +40,8 @@ export class CorralesController {
   @ApiOperation({
     summary: "Listar corrales de mi empresa con estado derivado",
     description:
-      "Comunes: libre/ocupado (ocupado = existe un lote activo asignado). " +
+      "Comunes: libre/ocupado (ocupado = existe al menos un lote activo " +
+      "asignado; pueden compartirlo varios lotes). " +
       "Enfermería: cantidad de animales adentro. No accesible para clientes " +
       "(ésos usan sólo /corrales/mapa, que se filtra a sus lotes).",
   })
@@ -100,7 +101,7 @@ export class CorralesController {
   @ApiOperation({
     summary: "Habilitar / deshabilitar un corral",
     description:
-      "No se puede deshabilitar un común ocupado por un lote activo ni una " +
+      "No se puede deshabilitar un común con lotes activos asignados ni una " +
       "enfermería con animales adentro.",
   })
   @ApiParam({ name: "id", type: Number, description: "ID del corral" })

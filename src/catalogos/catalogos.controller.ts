@@ -46,7 +46,8 @@ export class CatalogosController {
   })
   @ApiParam({
     name: "tipo",
-    description: "raza | categoria | proveedor | lugar_origen | motivo",
+    description:
+      "raza | categoria | pelaje | proveedor | lugar_origen | motivo",
   })
   listar(@Param("tipo") tipo: string, @Request() req) {
     return this.catalogosService.listarVisibles(
@@ -65,7 +66,8 @@ export class CatalogosController {
   })
   @ApiParam({
     name: "tipo",
-    description: "raza | categoria | proveedor | lugar_origen | motivo",
+    description:
+      "raza | categoria | pelaje | proveedor | lugar_origen | motivo",
   })
   crear(
     @Param("tipo") tipo: string,
@@ -76,6 +78,7 @@ export class CatalogosController {
       this.catalogosService.validarTipo(tipo),
       dto.nombre,
       req.user,
+      { sexo: dto.sexo, idRaza: dto.idRaza },
     );
   }
 
@@ -87,7 +90,8 @@ export class CatalogosController {
   })
   @ApiParam({
     name: "tipo",
-    description: "raza | categoria | proveedor | lugar_origen | motivo",
+    description:
+      "raza | categoria | pelaje | proveedor | lugar_origen | motivo",
   })
   @ApiQuery({
     name: "scope",
@@ -120,13 +124,15 @@ export class CatalogosController {
   })
   @ApiParam({
     name: "tipo",
-    description: "raza | categoria | proveedor | lugar_origen | motivo",
+    description:
+      "raza | categoria | pelaje | proveedor | lugar_origen | motivo",
   })
   crearAdmin(@Param("tipo") tipo: string, @Body() dto: CreateCatalogoAdminDto) {
     return this.catalogosService.crearAdmin(
       this.catalogosService.validarTipo(tipo),
       dto.nombre,
       dto.idEmpresa ?? null,
+      { sexo: dto.sexo },
     );
   }
 }

@@ -16,13 +16,16 @@ export class UpdateAnimalDto {
   nAnimal?: number;
 
   @IsOptional()
-  @IsIn(["MACHO", "HEMBRA"])
-  sexo?: string;
-
-  @IsOptional()
   @IsString()
   @MaxLength(50)
-  pelaje?: string;
+  caravana?: string;
+
+  /** Catálogo `pelaje` (global o de la empresa). null = limpiar. */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  idPelaje?: number | null;
 
   /** Catálogo `raza` (global o de la empresa). null = limpiar. */
   @IsOptional()
