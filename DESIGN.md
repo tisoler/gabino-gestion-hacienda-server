@@ -82,6 +82,14 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   excepción de enfermería; la ubicación efectiva del animal es `id_corral_enfermeria ??
   lote.id_corral` (derivada). Y `id_raza`/`id_categoria` (FKs a los catálogos, nullable).
   **El sexo ya no es columna del animal: se INFIERE de la categoría** (`categoria.sexo`).
+- `pesaje` — serie temporal de pesos, la FUENTE DE VERDAD: `id`, `id_animal` FK, `fecha` DATE,
+  `tipo` (`inicial`|`intermedio`|`final`), `peso` NUMERIC, `desbaste` NUMERIC (opcional, default
+  0), `peso_neto` (denormalizado = peso − desbaste), timestamps. Un pesaje es SIEMPRE por
+  animal: el "peso total del lote" de una fecha se obtiene SUMANDO los pesajes de esa fecha
+  (aunque la UI cargue un total, el server lo reparte `total / cantidad`). `UNIQUE(id_animal,
+  tipo, fecha)`. Las columnas `peso_inicial`/`peso_final`/fechas/netos/diferencia/aum_diario de
+  `animal` son una PROYECCIÓN derivada del pesaje 'inicial' y el 'final', recalculada por
+  `LotesService.proyectarAnimal` a cada cambio de pesaje (no se escriben directo).
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
   `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
@@ -160,5 +168,13 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
    limpia y el animal vuelve al corral ACTUAL de su lote por derivación — sin duplicar el
    corral en cada animal ni sincronizar cambios de lote. El toggle de enfermería manda al
    primer corral `enfermeria` activo (la UI ofrece picker si hay varios). La capacidad del
-   corral es informativa (no bloquea). En el mapa de drag & drop, un común expone `loteIds[]`
-   y "traer" es válido al soltar en un común que contenga el lote del animal.
+    corral es informativa (no bloquea). En el mapa de drag & drop, un común expone `loteIds[]`
+    y "traer" es válido al soltar en un común que contenga el lote del animal.
+8. **Pesajes como serie por animal**: la tabla `pesaje` es la fuente de verdad de los pesos
+   (inicial + N intermedios + final), siempre POR ANIMAL. El total del lote se deriva sumando
+   por fecha; la UI puede cargar por total y el server reparte. Las columnas de peso en `animal`
+   quedan como proyección recalculada (`proyectarAnimal`) para no romper la planilla PESAJE
+   ING-EGR ni la lista de animales. Endpoints en `LotesController`: `POST :id/pesajes/inicial`,
+   `POST :id/pesajes/intermedios`, `PATCH :id/pesajes/:pesajeId`,
+   `DELETE :id/pesajes/intermedios/:fecha`, `DELETE :id/pesajes/:pesajeId`. `GET /lotes/:id`
+   incluye `pesajes[]` (para columnas intermedias y la gráfica de evolución).

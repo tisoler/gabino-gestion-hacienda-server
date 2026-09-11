@@ -26,6 +26,7 @@ import { CreateAnimalesMasivaDto } from "./dto/create-animales-masiva.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
+import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -199,5 +200,79 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.getMovimientos(id, animalId, req.user);
+  }
+
+  @Post(":id/pesajes/inicial")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary: "Cargar / reemplazar el peso inicial del lote",
+    description:
+      "modo 'total' reparte el peso entre los animales; modo 'animal' usa la " +
+      "lista. El peso se guarda por animal (la fuente de verdad).",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  cargarPesoInicial(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CargarPesajesDto,
+    @Request() req,
+  ) {
+    return this.lotesService.cargarPesoInicial(id, dto, req.user);
+  }
+
+  @Post(":id/pesajes/intermedios")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary: "Agregar un pesaje intermedio (nueva fecha) al lote",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  cargarPesajeIntermedio(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CargarPesajesDto,
+    @Request() req,
+  ) {
+    return this.lotesService.cargarPesajeIntermedio(id, dto, req.user);
+  }
+
+  @Patch(":id/pesajes/:pesajeId")
+  @Permissions("escritura:lote")
+  @ApiOperation({ summary: "Editar un pesaje puntual (peso/desbaste/fecha)" })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  @ApiParam({ name: "pesajeId", type: Number, description: "ID del pesaje" })
+  editarPesaje(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("pesajeId", ParseIntPipe) pesajeId: number,
+    @Body() dto: EditarPesajeDto,
+    @Request() req,
+  ) {
+    return this.lotesService.editarPesaje(id, pesajeId, dto, req.user);
+  }
+
+  @Delete(":id/pesajes/intermedios/:fecha")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary:
+      "Eliminar un pesaje intermedio completo (todas las filas de una fecha)",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  @ApiParam({ name: "fecha", description: "YYYY-MM-DD" })
+  eliminarPesajesFecha(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("fecha") fecha: string,
+    @Request() req,
+  ) {
+    return this.lotesService.eliminarPesajesFecha(id, fecha, req.user);
+  }
+
+  @Delete(":id/pesajes/:pesajeId")
+  @Permissions("escritura:lote")
+  @ApiOperation({ summary: "Eliminar un pesaje puntual" })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  @ApiParam({ name: "pesajeId", type: Number, description: "ID del pesaje" })
+  eliminarPesaje(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("pesajeId", ParseIntPipe) pesajeId: number,
+    @Request() req,
+  ) {
+    return this.lotesService.eliminarPesaje(id, pesajeId, req.user);
   }
 }

@@ -3,6 +3,7 @@ import {
   ArrayNotEmpty,
   IsArray,
   IsDateString,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -14,7 +15,7 @@ import {
   ValidateNested,
 } from "class-validator";
 
-/** Fila del preview de la carga masiva: caravana obligatoria + N° opcional. */
+/** Fila del preview de la carga masiva: caravana obligatoria + N°/peso opcional. */
 export class AnimalMasivoItemDto {
   @IsString()
   @IsNotEmpty({ message: "La caravana es obligatoria" })
@@ -25,6 +26,16 @@ export class AnimalMasivoItemDto {
   @IsOptional()
   @IsInt()
   nAnimal?: number;
+
+  /** Peso inicial POR ANIMAL (sólo con modoInicial='animal'). */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  peso?: number;
+
+  /** Desbaste inicial por animal (opcional). */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  desbaste?: number;
 }
 
 export class CreateAnimalesMasivaDto {
@@ -49,29 +60,25 @@ export class CreateAnimalesMasivaDto {
   @Max(500)
   cantidad: number;
 
+  /** Fecha del pesaje inicial (si se carga peso inicial). */
   @IsOptional()
   @IsDateString()
   fechaPesajeIni?: string;
 
+  /** 'total' (repartir pesoTotal) | 'animal' (peso por fila). Omiso = sin peso. */
+  @IsOptional()
+  @IsIn(["total", "animal"])
+  modoInicial?: "total" | "animal";
+
+  /** modoInicial='total': peso bruto del lote. */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
-  pesoInicial?: number;
+  pesoTotal?: number;
 
+  /** modoInicial='total': desbaste total (opcional). */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
-  desbasteIni?: number;
-
-  @IsOptional()
-  @IsDateString()
-  fechaPesajeFin?: string;
-
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  pesoFinal?: number;
-
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  desbasteFin?: number;
+  desbasteTotal?: number;
 
   @IsOptional()
   @IsString()

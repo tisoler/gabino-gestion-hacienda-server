@@ -101,13 +101,21 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `PATCH /lotes/:id` · `POST /lotes/:id/animales` (`caravana` + `idPelaje` requeridos;
   `idRaza`/`idCategoria` opcionales; `nAnimal` auto = último del lote + 1) ·
   `POST /lotes/:id/animales/masiva` (carga masiva: raza opt + pelaje + categoría requeridos,
-  cantidad + caravanas, en una transacción) ·
+  cantidad + caravanas, peso inicial por `modoInicial` total/animal, en una transacción) ·
   `PATCH /lotes/:id/animales/:animalId` (incluye `estado` + `idMotivo`/`motivo` para el
   historial) · `DELETE /lotes/:id/animales/:animalId` ·
   `POST /lotes/:id/animales/:animalId/enfermeria` (motivo obligatorio → estado 'enfermo') ·
   `DELETE .../enfermeria` (body: estado 'sano'|'muerto' + causa opcional/obligatoria) ·
   `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
   de la empresa. Un **cliente** sólo ve sus propias partidas (`id_cliente = uid`).
+- **pesajes** (parte de `lotes`; fuente de verdad de los pesos, por animal):
+  `GET /lotes/:id` incluye `pesajes[]`. `POST :id/pesajes/inicial` y
+  `POST :id/pesajes/intermedios` ({ fecha, modo: total|animal, pesoTotal?, desbasteTotal?,
+  animales?[{animalId,peso,desbaste?}] }; con 'total' reparte `pesoTotal / cantidad animales`).
+  `PATCH :id/pesajes/:pesajeId` (edita peso/desbaste/fecha de un pesaje),
+  `DELETE :id/pesajes/intermedios/:fecha` (borra una columna intermedia del lote) y
+  `DELETE :id/pesajes/:pesajeId`. Tras cada cambio, `proyectarAnimal` recalcula las columnas
+  de peso de `animal` (inicial/final/diferencia/aum) desde sus pesajes. Ver decisión 8 de DESIGN.
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
   con `lotesOcupantes[]`, pueden compartirse) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteIds[]` de los

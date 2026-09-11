@@ -5,11 +5,13 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from "typeorm";
 import { Lote } from "./lote.entity";
 import { Corral } from "./corral.entity";
 import { Categoria, Pelaje, Raza } from "./catalogo.entity";
+import { Pesaje } from "./pesaje.entity";
 
 /**
  * Animal (cabeza de ganado) dentro de un lote. Campos según la planilla
@@ -150,6 +152,14 @@ export class Animal {
 
   @Column({ type: "text", nullable: true })
   observaciones: string;
+
+  /**
+   * Serie de pesajes (fuente de verdad de los pesos). Las columnas
+   * peso_inicial/peso_final/... de esta entidad son una PROYECCIÓN derivada
+   * del pesaje 'inicial' y del 'final', recalculada por el server.
+   */
+  @OneToMany(() => Pesaje, (pesaje) => pesaje.animal)
+  pesajes: Pesaje[];
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;

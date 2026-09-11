@@ -11,6 +11,7 @@ import { Animal } from "../entities/animal.entity";
 import { Corral } from "../entities/corral.entity";
 import { Empresa } from "../entities/empresa.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
+import { Pesaje } from "../entities/pesaje.entity";
 import { Roles, PALETA_LOTE } from "src/constantes";
 import { CreateLoteDto } from "./dto/create-lote.dto";
 import { UpdateLoteDto } from "./dto/update-lote.dto";
@@ -18,6 +19,7 @@ import { CreateAnimalDto } from "./dto/create-animal.dto";
 import { CreateAnimalesMasivaDto } from "./dto/create-animales-masiva.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
+import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { CatalogosService } from "../catalogos/catalogos.service";
 
@@ -55,6 +57,8 @@ export class LotesService {
     private empresaRepository: Repository<Empresa>,
     @InjectRepository(AnimalMovimiento)
     private movimientoRepository: Repository<AnimalMovimiento>,
+    @InjectRepository(Pesaje)
+    private pesajeRepository: Repository<Pesaje>,
     private cache: FirestoreCacheService,
     private catalogos: CatalogosService,
   ) {}
@@ -110,6 +114,14 @@ export class LotesService {
       order: { nAnimal: "ASC", id: "ASC" },
     });
     const nombreCliente = await this.nombreDeCliente(lote.idCliente);
+    // Serie de pesajes del lote (para las columnas intermedias y la gráfica).
+    const animalIds = animales.map((a) => a.id);
+    const pesajes = animalIds.length
+      ? await this.pesajeRepository.find({
+          where: { idAnimal: In(animalIds) },
+          order: { fecha: "ASC", id: "ASC" },
+        })
+      : [];
     const { corral, proveedor, lugarOrigen, ...base } = lote as any;
     return {
       ...base,
@@ -118,7 +130,31 @@ export class LotesService {
       nombreProveedor: proveedor?.nombre ?? null,
       nombreLugarOrigen: lugarOrigen?.nombre ?? null,
       animales: animales.map((a) => this.animalJson(a)),
+      pesajes: pesajes.map((p) => this.pesajeJson(p)),
     };
+  }
+
+  /** Serializa un pesaje (decimals → number, fecha → 'YYYY-MM-DD'). */
+  private pesajeJson(p: Pesaje): any {
+    return {
+      id: p.id,
+      animalId: p.idAnimal,
+      fecha: this.fechaIso(p.fecha),
+      tipo: p.tipo,
+      peso: Number(p.peso),
+      desbaste: Number(p.desbaste ?? 0),
+      pesoNeto: p.pesoNeto != null ? Number(p.pesoNeto) : null,
+    };
+  }
+
+  /** Date (o 'YYYY-MM-DD' de pg) → 'YYYY-MM-DD' sin corrimiento de zona. */
+  private fechaIso(f: Date | string | null): string | null {
+    if (f == null) return null;
+    if (typeof f === "string") return f.slice(0, 10);
+    const y = f.getFullYear();
+    const m = `${f.getMonth() + 1}`.padStart(2, "0");
+    const d = `${f.getDate()}`.padStart(2, "0");
+    return `${y}-${m}-${d}`;
   }
 
   async create(
@@ -304,19 +340,23 @@ export class LotesService {
       idPelaje: dto.idPelaje,
       idRaza: dto.idRaza ?? null,
       idCategoria: dto.idCategoria ?? null,
-      fechaPesajeIni: this.aDate(dto.fechaPesajeIni),
-      pesoInicial: dto.pesoInicial ?? null,
-      desbasteIni: dto.desbasteIni ?? 0,
-      fechaPesajeFin: this.aDate(dto.fechaPesajeFin),
-      pesoFinal: dto.pesoFinal ?? null,
-      desbasteFin: dto.desbasteFin ?? 0,
       observaciones: dto.observaciones ?? null,
       estado,
       idCorralEnfermeria: null,
     };
-    const computed = this.computar(base as any);
-    const animal = this.animalRepository.create({ ...base, ...computed });
-    const saved = await this.animalRepository.save(animal);
+    const saved = await this.animalRepository.save(
+      this.animalRepository.create(base),
+    );
+    // Los pesos SIEMPRE viven en `pesaje`: alta del inicial/final si vinieron.
+    await this.aplicarPesosDeDto(
+      saved.id,
+      dto.fechaPesajeIni,
+      dto.pesoInicial,
+      dto.desbasteIni,
+      dto.fechaPesajeFin,
+      dto.pesoFinal,
+      dto.desbasteFin,
+    );
     if (estado !== "sano") {
       await this.registrarMovimiento({
         idAnimal: saved.id,
@@ -329,6 +369,122 @@ export class LotesService {
       });
     }
     return this.animalJson(await this.cargarAnimal(saved.id));
+  }
+
+  /**
+   * Alta/edición de animal: crea/actualiza los pesajes 'inicial'/'final' a
+   * partir de los campos de peso del DTO (fecha + peso obligatorios juntos) y
+   * recalcula la proyección del animal.
+   */
+  private async aplicarPesosDeDto(
+    animalId: number,
+    fechaIni?: string,
+    pesoIni?: number | null,
+    desbasteIni?: number,
+    fechaFin?: string,
+    pesoFin?: number | null,
+    desbasteFin?: number,
+  ) {
+    if (fechaIni && pesoIni != null) {
+      await this.setPesajeTipo(
+        animalId,
+        "inicial",
+        fechaIni,
+        pesoIni,
+        desbasteIni,
+      );
+    }
+    if (fechaFin && pesoFin != null) {
+      await this.setPesajeTipo(
+        animalId,
+        "final",
+        fechaFin,
+        pesoFin,
+        desbasteFin,
+      );
+    }
+    await this.proyectarAnimal(animalId);
+  }
+
+  /**
+   * Garantiza UN pesaje por (animal, 'inicial'|'final'): actualiza el existente
+   * (incluida la fecha) o crea uno nuevo.
+   */
+  private async setPesajeTipo(
+    animalId: number,
+    tipo: "inicial" | "final",
+    fechaIso: string,
+    peso: number,
+    desbaste?: number,
+  ) {
+    const fecha = this.aDate(fechaIso);
+    if (!fecha) return;
+    const existente = await this.pesajeRepository.findOne({
+      where: { idAnimal: animalId, tipo },
+    });
+    const neto = Math.round((peso - Number(desbaste ?? 0)) * 100) / 100;
+    if (existente) {
+      existente.fecha = fecha;
+      existente.peso = peso;
+      existente.desbaste = desbaste ?? 0;
+      existente.pesoNeto = neto;
+      await this.pesajeRepository.save(existente);
+    } else {
+      await this.pesajeRepository.save(
+        this.pesajeRepository.create({
+          idAnimal: animalId,
+          tipo,
+          fecha,
+          peso,
+          desbaste: desbaste ?? 0,
+          pesoNeto: neto,
+        }),
+      );
+    }
+  }
+
+  /**
+   * Recalcula la PROYECCIÓN de `animal` (peso_inicial/final, fechas, desbastes,
+   * netos, diferencia y aum. diario) desde sus pesajes 'inicial' y 'final'.
+   */
+  private async proyectarAnimal(animalId: number) {
+    await this.proyectarAnimales([animalId]);
+  }
+
+  /**
+   * Proyección BULK: 1 SELECT de pesajes + 1 de animales, cálculo en memoria y
+   * un único `save(array)` (transacción) en lugar de N×(select+select+update).
+   */
+  private async proyectarAnimales(animalIds: number[]) {
+    if (animalIds.length === 0) return;
+    const [pesajes, animales] = await Promise.all([
+      this.pesajeRepository.find({
+        where: { idAnimal: In(animalIds) },
+        order: { fecha: "ASC", id: "ASC" },
+      }),
+      this.animalRepository.find({ where: { id: In(animalIds) } }),
+    ]);
+    const porAnimal = new Map<
+      number,
+      { ini: Pesaje | null; fin: Pesaje | null }
+    >();
+    for (const p of pesajes) {
+      const acc = porAnimal.get(p.idAnimal) ?? { ini: null, fin: null };
+      if (p.tipo === "inicial" && !acc.ini) acc.ini = p;
+      if (p.tipo === "final" && !acc.fin) acc.fin = p;
+      porAnimal.set(p.idAnimal, acc);
+    }
+    for (const a of animales) {
+      const { ini, fin } = porAnimal.get(a.id) ?? { ini: null, fin: null };
+      a.fechaPesajeIni = ini?.fecha ?? null;
+      a.pesoInicial = ini ? Number(ini.peso) : null;
+      a.desbasteIni = ini ? Number(ini.desbaste ?? 0) : 0;
+      a.fechaPesajeFin = fin?.fecha ?? null;
+      a.pesoFinal = fin ? Number(fin.peso) : null;
+      a.desbasteFin = fin ? Number(fin.desbaste ?? 0) : 0;
+      Object.assign(a, this.computar(a));
+    }
+    if (animales.length > 0) await this.animalRepository.save(animales);
   }
 
   /**
@@ -385,35 +541,79 @@ export class LotesService {
       await this.validarCaravanaLibre(lote.id, c, undefined);
     }
 
+    // Peso inicial por animal (total → se reparte; animal → viene por fila).
+    const redondear = (n: number) => Math.round(n * 100) / 100;
+    let pesoPorAnimal:
+      | ((item: (typeof dto.animales)[number]) => {
+          peso: number;
+          desbaste: number;
+        } | null)
+      | null = null;
+    if (dto.modoInicial === "total") {
+      if (!dto.fechaPesajeIni || dto.pesoTotal == null) {
+        throw new BadRequestException(
+          "Para cargar peso inicial por total indicá la fecha y el peso total",
+        );
+      }
+      const n = dto.animales.length;
+      const per = redondear(Number(dto.pesoTotal) / n);
+      const desb =
+        dto.desbasteTotal != null
+          ? redondear(Number(dto.desbasteTotal) / n)
+          : 0;
+      pesoPorAnimal = () => ({ peso: per, desbaste: desb });
+    } else if (dto.modoInicial === "animal") {
+      if (!dto.fechaPesajeIni) {
+        throw new BadRequestException("Para el peso inicial indicá la fecha");
+      }
+      pesoPorAnimal = (item) =>
+        item.peso != null
+          ? { peso: Number(item.peso), desbaste: Number(item.desbaste ?? 0) }
+          : null;
+    }
+
+    const fechaIni = dto.fechaPesajeIni ? this.aDate(dto.fechaPesajeIni) : null;
+    // BULK: 1 save de animales + 1 save de pesajes dentro de UNA transacción.
     const ids = await this.animalRepository.manager.transaction(async (em) => {
       const repo = em.getRepository(Animal);
       let next = await this.siguienteNAnimal(lote.id, undefined, em);
-      const creados: number[] = [];
-      for (const item of dto.animales) {
-        const nAnimal = item.nAnimal ?? next++;
-        const base = {
+      const nuevos = dto.animales.map((item) =>
+        repo.create({
           idLote: lote.id,
-          nAnimal,
+          nAnimal: item.nAnimal ?? next++,
           caravana: item.caravana.trim(),
           idPelaje: dto.idPelaje,
           idRaza: dto.idRaza ?? null,
           idCategoria: dto.idCategoria,
-          fechaPesajeIni: this.aDate(dto.fechaPesajeIni),
-          pesoInicial: dto.pesoInicial ?? null,
-          desbasteIni: dto.desbasteIni ?? 0,
-          fechaPesajeFin: this.aDate(dto.fechaPesajeFin),
-          pesoFinal: dto.pesoFinal ?? null,
-          desbasteFin: dto.desbasteFin ?? 0,
           observaciones: dto.observaciones ?? null,
           estado: "sano",
           idCorralEnfermeria: null,
-        };
-        const computed = this.computar(base as any);
-        const saved = await repo.save(repo.create({ ...base, ...computed }));
-        creados.push(saved.id);
+        }),
+      );
+      const saved = await repo.save(nuevos);
+      if (pesoPorAnimal && fechaIni) {
+        const pesajeRepo = em.getRepository(Pesaje);
+        const pesajes = saved
+          .map((a, i) => {
+            const w = pesoPorAnimal(dto.animales[i]);
+            if (!w) return null;
+            return pesajeRepo.create({
+              idAnimal: a.id,
+              tipo: "inicial",
+              fecha: fechaIni,
+              peso: w.peso,
+              desbaste: w.desbaste,
+              pesoNeto: redondear(w.peso - w.desbaste),
+            });
+          })
+          .filter((p): p is NonNullable<typeof p> => p != null);
+        if (pesajes.length > 0) await pesajeRepo.save(pesajes);
       }
-      return creados;
+      return saved.map((a) => a.id);
     });
+
+    // Proyección BULK de los animales creados (peso_inicial/neto desde su pesaje).
+    await this.proyectarAnimales(ids);
 
     const animales = await this.animalRepository.find({
       where: { id: In(ids) },
@@ -482,16 +682,6 @@ export class LotesService {
       }
       animal.idCategoria = dto.idCategoria ?? null;
     }
-    if (dto.fechaPesajeIni !== undefined) {
-      animal.fechaPesajeIni = this.aDate(dto.fechaPesajeIni);
-    }
-    if (dto.pesoInicial !== undefined) animal.pesoInicial = dto.pesoInicial;
-    if (dto.desbasteIni !== undefined) animal.desbasteIni = dto.desbasteIni;
-    if (dto.fechaPesajeFin !== undefined) {
-      animal.fechaPesajeFin = this.aDate(dto.fechaPesajeFin);
-    }
-    if (dto.pesoFinal !== undefined) animal.pesoFinal = dto.pesoFinal;
-    if (dto.desbasteFin !== undefined) animal.desbasteFin = dto.desbasteFin;
     if (dto.observaciones !== undefined) {
       animal.observaciones = dto.observaciones;
     }
@@ -516,12 +706,29 @@ export class LotesService {
       estadoNuevo = dto.estado;
     }
 
-    Object.assign(animal, this.computar(animal));
-    const saved = await this.animalRepository.save(animal);
+    // Los pesos NO se escriben directo: se guardan como pesajes (abajo).
+    await this.animalRepository.save(animal);
+
+    const hayPesos =
+      dto.pesoInicial !== undefined ||
+      dto.pesoFinal !== undefined ||
+      dto.fechaPesajeIni !== undefined ||
+      dto.fechaPesajeFin !== undefined;
+    if (hayPesos) {
+      await this.aplicarPesosDeDto(
+        animal.id,
+        dto.fechaPesajeIni,
+        dto.pesoInicial,
+        dto.desbasteIni,
+        dto.fechaPesajeFin,
+        dto.pesoFinal,
+        dto.desbasteFin,
+      );
+    }
 
     if (estadoNuevo) {
       await this.registrarMovimiento({
-        idAnimal: saved.id,
+        idAnimal: animal.id,
         idEmpresa: lote.idEmpresa,
         tipo: "cambio_estado",
         estadoAntes: estadoAnterior,
@@ -531,7 +738,7 @@ export class LotesService {
         user,
       });
     }
-    return this.animalJson(await this.cargarAnimal(saved.id));
+    return this.animalJson(await this.cargarAnimal(animal.id));
   }
 
   async removeAnimal(
@@ -712,6 +919,209 @@ export class LotesService {
         : null,
       fecha: m.createdAt,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pesajes (serie temporal por animal: inicial + N intermedios + final)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Carga el PESO INICIAL de todo el lote. Con `modo: 'total'` reparte
+   * `pesoTotal / cantidad` entre los animales; con `modo: 'animal'` usa la
+   * lista. Reemplaza el pesaje 'inicial' de cada animal y recalcula la
+   * proyección.
+   */
+  async cargarPesoInicial(idLote: number, dto: CargarPesajesDto, user: any) {
+    return this.cargarPesajes(idLote, dto, user, "inicial");
+  }
+
+  /**
+   * Agrega un PESAJE INTERMEDIO (una fecha nueva) al lote. Mismo mecanismo de
+   * total/animal que el inicial.
+   */
+  async cargarPesajeIntermedio(
+    idLote: number,
+    dto: CargarPesajesDto,
+    user: any,
+  ) {
+    return this.cargarPesajes(idLote, dto, user, "intermedio");
+  }
+
+  private async cargarPesajes(
+    idLote: number,
+    dto: CargarPesajesDto,
+    user: any,
+    tipo: "inicial" | "intermedio",
+  ): Promise<{ actualizados: number }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha de pesaje inválida");
+
+    const animales = await this.animalRepository.find({
+      where: { idLote: lote.id },
+      order: { nAnimal: "ASC", id: "ASC" },
+    });
+    if (animales.length === 0) {
+      throw new BadRequestException(
+        "El lote no tiene animales; agregá animales antes de cargar pesos",
+      );
+    }
+
+    const redondear = (n: number) => Math.round(n * 100) / 100;
+    let porAnimal: (a: Animal) => { peso: number; desbaste: number } | null =
+      null;
+
+    if (dto.modo === "total") {
+      if (dto.pesoTotal == null) {
+        throw new BadRequestException("Indicá el peso total del lote");
+      }
+      const per = redondear(Number(dto.pesoTotal) / animales.length);
+      const desb =
+        dto.desbasteTotal != null
+          ? redondear(Number(dto.desbasteTotal) / animales.length)
+          : 0;
+      porAnimal = () => ({ peso: per, desbaste: desb });
+    } else {
+      if (!dto.animales?.length) {
+        throw new BadRequestException("Ingresá el peso de cada animal");
+      }
+      const idsLote = new Set(animales.map((a) => a.id));
+      const map = new Map<number, { peso: number; desbaste: number }>();
+      for (const r of dto.animales) {
+        if (!idsLote.has(r.animalId)) {
+          throw new BadRequestException(
+            "Un animal indicado no pertenece a este lote",
+          );
+        }
+        map.set(r.animalId, {
+          peso: Number(r.peso),
+          desbaste: Number(r.desbaste ?? 0),
+        });
+      }
+      porAnimal = (a) => map.get(a.id) ?? null;
+    }
+
+    // Pesos objetivo por animal (map, no loop de queries).
+    const pesos = new Map<number, { peso: number; desbaste: number }>();
+    for (const a of animales) {
+      const w = porAnimal(a);
+      if (w) pesos.set(a.id, w);
+    }
+    if (pesos.size === 0) {
+      throw new BadRequestException("No hay pesos para guardar");
+    }
+
+    // 1) Upsert BULK de pesajes: 1 SELECT + 1 save(array) (transacción única).
+    const ids = Array.from(pesos.keys());
+    const whereExistentes: any = { idAnimal: In(ids), tipo };
+    if (tipo === "intermedio") whereExistentes.fecha = fecha;
+    const existentes = await this.pesajeRepository.find({
+      where: whereExistentes,
+    });
+    const porAnimalExistente = new Map<number, Pesaje>(
+      existentes.map((p) => [p.idAnimal, p]),
+    );
+    const aGuardar: Pesaje[] = [];
+    for (const [animalId, w] of pesos) {
+      const neto = redondear(w.peso - Number(w.desbaste ?? 0));
+      const e = porAnimalExistente.get(animalId);
+      if (e) {
+        e.fecha = fecha;
+        e.peso = w.peso;
+        e.desbaste = w.desbaste;
+        e.pesoNeto = neto;
+        aGuardar.push(e);
+      } else {
+        aGuardar.push(
+          this.pesajeRepository.create({
+            idAnimal: animalId,
+            tipo,
+            fecha,
+            peso: w.peso,
+            desbaste: w.desbaste,
+            pesoNeto: neto,
+          }),
+        );
+      }
+    }
+    await this.pesajeRepository.save(aGuardar);
+
+    // 2) Proyección BULK de los animales afectados.
+    await this.proyectarAnimales(ids);
+    return { actualizados: ids.length };
+  }
+
+  /** Edita un pesaje puntual (peso/desbaste/fecha). Recalcula la proyección. */
+  async editarPesaje(
+    idLote: number,
+    pesajeId: number,
+    dto: EditarPesajeDto,
+    user: any,
+  ): Promise<any> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const pesaje = await this.pesajeRepository.findOne({
+      where: { id: pesajeId },
+      relations: ["animal"],
+    });
+    if (!pesaje || pesaje.animal?.idLote !== lote.id) {
+      throw new NotFoundException("Pesaje no encontrado");
+    }
+    if (dto.fecha) {
+      const f = this.aDate(dto.fecha);
+      if (f) pesaje.fecha = f;
+    }
+    if (dto.peso !== undefined) pesaje.peso = dto.peso;
+    if (dto.desbaste !== undefined) pesaje.desbaste = dto.desbaste;
+    pesaje.pesoNeto =
+      Math.round((Number(pesaje.peso) - Number(pesaje.desbaste ?? 0)) * 100) /
+      100;
+    await this.pesajeRepository.save(pesaje);
+    await this.proyectarAnimal(pesaje.idAnimal);
+    return this.pesajeJson(pesaje);
+  }
+
+  /** Elimina un pesaje puntual (p. ej. un intermedo aislado). */
+  async eliminarPesaje(idLote: number, pesajeId: number, user: any) {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const pesaje = await this.pesajeRepository.findOne({
+      where: { id: pesajeId },
+      relations: ["animal"],
+    });
+    if (!pesaje || pesaje.animal?.idLote !== lote.id) {
+      throw new NotFoundException("Pesaje no encontrado");
+    }
+    await this.pesajeRepository.delete(pesaje.id);
+    await this.proyectarAnimal(pesaje.idAnimal);
+    return { ok: true };
+  }
+
+  /**
+   * Elimina TODOS los pesajes intermedios de una fecha del lote (borra una
+   * columna de pesaje intermedio completa). Recalcula la proyección afectados.
+   */
+  async eliminarPesajesFecha(
+    idLote: number,
+    fechaIso: string,
+    user: any,
+  ): Promise<{ eliminados: number }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const fecha = this.aDate(fechaIso);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    const animales = await this.animalRepository.find({
+      where: { idLote: lote.id },
+      select: ["id"],
+    });
+    const ids = animales.map((a) => a.id);
+    if (ids.length === 0) return { eliminados: 0 };
+    const aEliminar = await this.pesajeRepository.find({
+      where: { idAnimal: In(ids), tipo: "intermedio", fecha },
+    });
+    if (aEliminar.length === 0) return { eliminados: 0 };
+    await this.pesajeRepository.delete(aEliminar.map((p) => p.id));
+    await this.proyectarAnimales(
+      Array.from(new Set(aEliminar.map((p) => p.idAnimal))),
+    );
+    return { eliminados: aEliminar.length };
   }
 
   // ---------------------------------------------------------------------------
