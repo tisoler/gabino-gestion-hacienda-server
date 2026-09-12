@@ -50,12 +50,13 @@ export class CorralesController {
   }
 
   @Get("mapa")
-  @Permissions("lectura:corral")
+  @Permissions("lectura:lote")
   @ApiOperation({
     summary: "Mapa de corrales activos (panel de Lotes)",
     description:
-      "Por corral, las fichas de animales (n°, estado, color del lote). " +
-      "Enfermería muestra animales de varios lotes.",
+      "Por corral, las fichas de animales (caravana, estado, color del lote). " +
+      "Enfermería se muestra siempre; los comunes sólo con los lotes del " +
+      "usuario (un cliente ve sus lotes y sus animales).",
   })
   mapa(@Request() req): Promise<CorralMapa[]> {
     return this.corralesService.mapa(req.user);

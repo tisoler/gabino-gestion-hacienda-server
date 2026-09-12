@@ -26,6 +26,7 @@ import { CatalogosService } from "../catalogos/catalogos.service";
 export interface LoteResumen {
   id: number;
   idEmpresa: number;
+  nombreEmpresa: string | null;
   nombre: string;
   descripcion: string | null;
   fecha: Date | null;
@@ -73,6 +74,7 @@ export class LotesService {
   async findAll(user: any, currentEmpresaId?: number): Promise<LoteResumen[]> {
     const query = this.loteRepository
       .createQueryBuilder("lote")
+      .leftJoinAndSelect("lote.empresa", "empresa")
       .leftJoinAndSelect("lote.corral", "corral")
       .leftJoinAndSelect("lote.proveedor", "proveedor")
       .leftJoinAndSelect("lote.lugarOrigen", "lugarOrigen");
@@ -1327,6 +1329,7 @@ export class LotesService {
     return lotes.map((l) => ({
       id: l.id,
       idEmpresa: l.idEmpresa,
+      nombreEmpresa: l.empresa?.nombre ?? null,
       nombre: l.nombre,
       descripcion: l.descripcion,
       fecha: l.fecha,

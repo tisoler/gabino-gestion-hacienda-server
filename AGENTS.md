@@ -119,13 +119,14 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
   con `lotesOcupantes[]`, pueden compartirse) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteIds[]` de los
-  lotes del común para validar drag & drop) ·   `GET /corrales/enfermerias` (picker) · `POST /corrales` ·
+  lotes del común para validar drag & drop; requiere `lectura:lote`, no `lectura:corral`) ·
+  `GET /corrales/enfermerias` (picker) · `POST /corrales` ·
   `PATCH /corrales/:id` (tipo NO editable; el `nombre` se normaliza con `capitalizarNombre`,
   regla 9) · `PATCH /corrales/:id/activo` (toggle; bloquea
   deshabilitar comunes con lotes activos / enfermerías con animales). `GET /corrales` y
   `/corrales/enfermerias` están
   restringidos a no-clientes (`@Roles`); el cliente usa sólo `/corrales/mapa`, que se filtra
-  a sus lotes (regla 8).
+  a sus lotes y animales (regla 8), con enfermería siempre visible.
 - **usuarios**: `POST /usuarios/bootstrap` (sin rol, pendiente) · `GET /usuarios/candidatos` ·
   `PATCH /usuarios/:uid/rol` (sys-admin asigna anfitrión/operario/cliente) ·
   `PATCH /usuarios/:uid/nombre|celular`.
@@ -150,6 +151,6 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 | `sys-admin` | todos |
 | `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral` |
 | `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral` |
-| `cliente` | `lectura:lote` |
+| `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

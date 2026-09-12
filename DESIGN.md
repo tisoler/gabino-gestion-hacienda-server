@@ -38,7 +38,7 @@ Roles en Firestore (`roles/{id}`). idRol: `1=sys-admin`, `2=anfitrion`, `3=opera
 | `sys-admin` | todos |
 | `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral` |
 | `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral` |
-| `cliente` | `lectura:lote` |
+| `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
 
 Flujo de registro: un usuario se registra **sin rol** (`idRol: null`) y queda pendiente.
 `sys-admin` le asigna el rol (**anfitrión**, **cliente** u **operario**) desde la sección
