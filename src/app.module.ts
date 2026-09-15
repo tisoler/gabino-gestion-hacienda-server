@@ -17,6 +17,7 @@ import { Animal } from "./entities/animal.entity";
 import { Corral } from "./entities/corral.entity";
 import { AnimalMovimiento } from "./entities/animal-movimiento.entity";
 import { Pesaje } from "./entities/pesaje.entity";
+import { Partida } from "./entities/partida.entity";
 import {
   Categoria,
   LugarOrigen,
@@ -48,6 +49,7 @@ import {
           Corral,
           AnimalMovimiento,
           Pesaje,
+          Partida,
           Raza,
           Categoria,
           Pelaje,

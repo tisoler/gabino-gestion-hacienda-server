@@ -6,6 +6,7 @@ import { Corral } from "../entities/corral.entity";
 import { Empresa } from "../entities/empresa.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Pesaje } from "../entities/pesaje.entity";
+import { Partida } from "../entities/partida.entity";
 import { LotesService } from "./lotes.service";
 import { LotesController } from "./lotes.controller";
 import { CatalogosModule } from "../catalogos/catalogos.module";
@@ -19,6 +20,7 @@ import { CatalogosModule } from "../catalogos/catalogos.module";
       Empresa,
       AnimalMovimiento,
       Pesaje,
+      Partida,
     ]),
     CatalogosModule,
   ],

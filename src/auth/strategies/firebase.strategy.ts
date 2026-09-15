@@ -70,6 +70,8 @@ export class FirebaseStrategy extends PassportStrategy(Strategy, "firebase") {
       return {
         id: uid,
         firebaseUid: uid,
+        // Nombre para mostrar (Firestore); fallback al displayName del token.
+        nombre: authData.nombre ?? decodedUser.name ?? null,
         nombreUsuario: decodedUser.email,
         email: decodedUser.email,
         idEmpresas,

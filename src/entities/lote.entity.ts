@@ -12,6 +12,7 @@ import { Empresa } from "./empresa.entity";
 import { Animal } from "./animal.entity";
 import { Corral } from "./corral.entity";
 import { LugarOrigen, Proveedor } from "./catalogo.entity";
+import { Partida } from "./partida.entity";
 
 /**
  * Lote (partida de animales) hospedado por una empresa. `idCliente` es el UID
@@ -73,6 +74,9 @@ export class Lote {
 
   @OneToMany(() => Animal, (animal) => animal.lote)
   animales: Animal[];
+
+  @OneToMany(() => Partida, (partida) => partida.lote)
+  partidas: Partida[];
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;

@@ -86,7 +86,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 
 ## Módulos
 
-- **auth**: `FirebaseStrategy` (valida ID token + resuelve `idEmpresas`, `roles`, `permisos`),
+- **auth**: `FirebaseStrategy` (valida ID token + resuelve `idEmpresas`, `roles`, `permisos`,
+  `nombre` —de Firestore, `nombre`/`nombreUsuario`— vía `getOrLoadAuth`),
   guards (`firebase`, `firebase-bootstrap`, `roles`, `permissions`), `GET /auth/me`.
 - **cache**: `FirestoreCacheService` + `POST /cache/invalidate`.
 - **empresas**: `GET /empresas` · `GET /empresas/me` · `POST /empresas` (el anfitrión crea su
@@ -109,13 +110,24 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
   de la empresa. Un **cliente** sólo ve sus propias partidas (`id_cliente = uid`).
 - **pesajes** (parte de `lotes`; fuente de verdad de los pesos, por animal):
-  `GET /lotes/:id` incluye `pesajes[]`. `POST :id/pesajes/inicial` y
-  `POST :id/pesajes/intermedios` ({ fecha, modo: total|animal, pesoTotal?, desbasteTotal?,
-  animales?[{animalId,peso,desbaste?}] }; con 'total' reparte `pesoTotal / cantidad animales`).
+  `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial` (acepta
+  `idPartida`: el inicial es POR PARTIDA), `POST :id/pesajes/intermedios` (del LOTE) y
+  `POST :id/pesajes/final` (del LOTE, un `final` por animal; admite desbaste → neto)
+  ({ fecha, modo: total|animal, pesoTotal?, desbasteTotal?,
+  animales?[{animalId,peso,desbaste?}] }; 'total' reparte `pesoTotal / cantidad objetivo`;
+  'animal' exige el peso de TODOS los animales del objetivo).
   `PATCH :id/pesajes/:pesajeId` (edita peso/desbaste/fecha de un pesaje),
-  `DELETE :id/pesajes/intermedios/:fecha` (borra una columna intermedia del lote) y
-  `DELETE :id/pesajes/:pesajeId`. Tras cada cambio, `proyectarAnimal` recalcula las columnas
-  de peso de `animal` (inicial/final/diferencia/aum) desde sus pesajes. Ver decisión 8 de DESIGN.
+  `DELETE :id/pesajes/intermedios/:fecha` (borra una columna intermedia del lote),
+  `DELETE :id/pesajes/final` (borra el pesaje final) y `DELETE :id/pesajes/:pesajeId`. Tras
+  cada cambio, `proyectarAnimal(es)` recalcula las columnas de peso de `animal`
+  (inicial/final/netos y **diferencia = peso final − peso inicial, BRUTOS**); el **aum. diario
+  no se persiste**: lo calcula `calcularAumDiario` en `GET /lotes/:id` usando el pesaje `final`
+  si existe, si no el último por fecha. Ver decisión 8 de DESIGN.
+- **partidas** (parte de `lotes`; tandas de ingreso): tabla `partida` (id_lote, fecha de carga)
+  + `animal.id_partida`. El nombre ("Partida N") se deriva por orden de fecha/id. Al dar de alta
+  animales, `resolverPartidaAlta`: `nuevaPartida` (crea hoy, sin pesar) / `idPartida` (une; si la
+  partida ya tiene inicial, EXIGE los pesos nuevos a esa fecha) / ninguno (reutiliza la partida
+  sin pesar o crea una). `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
   con `lotesOcupantes[]`, pueden compartirse) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteIds[]` de los

@@ -7,6 +7,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  Min,
   ValidateNested,
 } from "class-validator";
 
@@ -55,6 +56,15 @@ export class CargarPesajesDto {
   @ValidateNested({ each: true })
   @Type(() => PesajeAnimalRowDto)
   animales?: PesajeAnimalRowDto[];
+
+  /**
+   * Partida objetivo del PESAJE INICIAL (cada partida pesa su propio inicial).
+   * Para intermedios/finales se ignora: son del lote completo.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  idPartida?: number;
 }
 
 /** Edición de un pesaje puntual (peso/desbaste/fecha). */

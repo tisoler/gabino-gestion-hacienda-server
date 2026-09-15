@@ -233,6 +233,23 @@ export class LotesController {
     return this.lotesService.cargarPesajeIntermedio(id, dto, req.user);
   }
 
+  @Post(":id/pesajes/final")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary: "Cargar / actualizar el pesaje final del lote",
+    description:
+      "Un pesaje 'final' por animal (lote completo). Admite desbaste para " +
+      "calcular el neto. Recalcula peso_final/neto_final/diferencia.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  cargarPesoFinal(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CargarPesajesDto,
+    @Request() req,
+  ) {
+    return this.lotesService.cargarPesoFinal(id, dto, req.user);
+  }
+
   @Patch(":id/pesajes/:pesajeId")
   @Permissions("escritura:lote")
   @ApiOperation({ summary: "Editar un pesaje puntual (peso/desbaste/fecha)" })
@@ -261,6 +278,14 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.eliminarPesajesFecha(id, fecha, req.user);
+  }
+
+  @Delete(":id/pesajes/final")
+  @Permissions("escritura:lote")
+  @ApiOperation({ summary: "Eliminar el pesaje final del lote" })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  eliminarPesoFinal(@Param("id", ParseIntPipe) id: number, @Request() req) {
+    return this.lotesService.eliminarPesoFinal(id, req.user);
   }
 
   @Delete(":id/pesajes/:pesajeId")

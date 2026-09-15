@@ -12,6 +12,7 @@ import { Lote } from "./lote.entity";
 import { Corral } from "./corral.entity";
 import { Categoria, Pelaje, Raza } from "./catalogo.entity";
 import { Pesaje } from "./pesaje.entity";
+import { Partida } from "./partida.entity";
 
 /**
  * Animal (cabeza de ganado) dentro de un lote. Campos según la planilla
@@ -38,6 +39,14 @@ export class Animal {
   @ManyToOne(() => Lote, (lote) => lote.animales)
   @JoinColumn({ name: "id_lote" })
   lote: Lote;
+
+  /** Partida (tanda de ingreso) a la que pertenece el animal dentro del lote. */
+  @Column({ name: "id_partida", type: "int", nullable: true })
+  idPartida: number | null;
+
+  @ManyToOne(() => Partida, { nullable: true })
+  @JoinColumn({ name: "id_partida" })
+  partida: Partida;
 
   @Column({ name: "id_corral_enfermeria", type: "int", nullable: true })
   idCorralEnfermeria: number | null;
@@ -141,14 +150,8 @@ export class Animal {
   @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
   diferencia: number;
 
-  @Column({
-    name: "aum_diario",
-    type: "decimal",
-    precision: 10,
-    scale: 4,
-    nullable: true,
-  })
-  aumDiario: number;
+  // El aumento diario NO es columna: se calcula al consultar el lote
+  // (último peso − inicial ÷ días) y se devuelve en el JSON del animal.
 
   @Column({ type: "text", nullable: true })
   observaciones: string;

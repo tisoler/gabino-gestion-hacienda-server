@@ -11,6 +11,8 @@ export interface CachedAuthUser {
   idEmpresas: number[];
   roles: string[];
   permisos: string[];
+  /** Nombre para mostrar (Firestore `nombre`/`nombreUsuario`); puede ser null. */
+  nombre: string | null;
 }
 
 /**
@@ -125,9 +127,21 @@ export class FirestoreCacheService {
 
     const idEmpresas = this.resolveIdEmpresas(userData);
 
-    const data: CachedAuthUser = { idEmpresas, roles, permisos };
+    // Nombre para mostrar: prioriza el `nombre` de Firestore (el admin lo
+    // controla), luego `nombreUsuario`.
+    const nombre = this.resolveNombre(userData);
+
+    const data: CachedAuthUser = { idEmpresas, roles, permisos, nombre };
     this.setAuth(uid, data);
     return data;
+  }
+
+  /** Nombre para mostrar desde Firestore (`nombre` → `nombreUsuario`). */
+  resolveNombre(data: any): string | null {
+    for (const v of [data?.nombre, data?.nombreUsuario]) {
+      if (typeof v === "string" && v.trim() !== "") return v.trim();
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------

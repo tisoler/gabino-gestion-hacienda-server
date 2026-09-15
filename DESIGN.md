@@ -76,8 +76,10 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   `n_animal` (auto = último del lote + 1 si no viene), `caravana` (VARCHAR, requerida en la
   app, única por lote), `id_pelaje` (FK al catálogo `pelaje`), `fecha_pesaje_ini`,
   `peso_inicial`, `desbaste_ini`, `peso_neto_ini`, `fecha_pesaje_fin`, `peso_final`,
-  `desbaste_fin`, `peso_neto_fin`, `diferencia`, `aum_diario`, `observaciones`. Los
-  netos/diferencia/aum diario se calculan server-side (`LotesService.computar`). Además
+  `desbaste_fin`, `peso_neto_fin`, `diferencia`, `observaciones`. Los
+  netos/diferencia se calculan server-side (`LotesService.computar`). El **aumento diario NO es
+  columna**: se calcula al consultar `/lotes/:id` (`calcularAumDiario`: último peso − inicial ÷
+  días). Además
   `estado` (`sano`|`enfermo`|`muerto`) e `id_corral_enfermeria` (nullable): sólo marca la
   excepción de enfermería; la ubicación efectiva del animal es `id_corral_enfermeria ??
   lote.id_corral` (derivada). Y `id_raza`/`id_categoria` (FKs a los catálogos, nullable).
@@ -87,9 +89,15 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   0), `peso_neto` (denormalizado = peso − desbaste), timestamps. Un pesaje es SIEMPRE por
   animal: el "peso total del lote" de una fecha se obtiene SUMANDO los pesajes de esa fecha
   (aunque la UI cargue un total, el server lo reparte `total / cantidad`). `UNIQUE(id_animal,
-  tipo, fecha)`. Las columnas `peso_inicial`/`peso_final`/fechas/netos/diferencia/aum_diario de
+  tipo, fecha)`. Las columnas `peso_inicial`/`peso_final`/fechas/netos/diferencia de
   `animal` son una PROYECCIÓN derivada del pesaje 'inicial' y el 'final', recalculada por
-  `LotesService.proyectarAnimal` a cada cambio de pesaje (no se escriben directo).
+  `LotesService.proyectarAnimal` a cada cambio de pesaje (no se escriben directo). El
+  `aumDiario` no se persiste: se calcula en `GET /lotes/:id`.
+- `partida` — tanda de animales ingresados juntos dentro de un lote: `id`, `id_lote` FK,
+  `fecha` DATE (fecha de carga), timestamps. El nombre ("Partida 1", "Partida 2", …) se DERIVA
+  ordenando por fecha/id dentro del lote (no se guarda). `animal.id_partida` FK. Cada partida
+  tiene su **pesaje inicial**; los **intermedios y finales son del lote** (todas las partidas
+  se pesan juntas). Si un lote tiene una sola partida, la UI no muestra la división.
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
   `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
@@ -156,9 +164,9 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 5. **Roles `anfitrion`/`operario`/`cliente`** reemplazan asesor/productor del proyecto base.
    sys-admin conserva la capacidad de elegir empresa puntual vía header `x-empresa-id`.
    El anfitrión vincula **clientes y operarios** a su empresa desde `/clientes` (rol al vincular).
-6. **Lotes como partidas de animales**: cada lote (`id_empresa` + dueño opcional) agrupa
-   `animal`es. La entidad animal replica la planilla PESAJE ING-EGR; los campos derivados
-   (peso neto, diferencia, aum. diario) se calculan en el server para mantener coherencia.
+ 6. **Lotes como partidas de animales**: cada lote (`id_empresa` + dueño opcional) agrupa
+    `animal`es. La entidad animal replica la planilla PESAJE ING-EGR; los campos derivados
+    (peso neto, diferencia) se calculan en el server y el aum. diario al consultar el lote.
    Permisos: `lectura:lote` / `escritura:lote` (anfitrión y operario escriben; cliente lee
    sólo SUS lotes: `id_cliente = uid`).
 7. **Modelo de corrales derivado**: la ocupación del corral común es `lote.id_corral`
@@ -176,5 +184,13 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
    quedan como proyección recalculada (`proyectarAnimal`) para no romper la planilla PESAJE
    ING-EGR ni la lista de animales. Endpoints en `LotesController`: `POST :id/pesajes/inicial`,
    `POST :id/pesajes/intermedios`, `PATCH :id/pesajes/:pesajeId`,
-   `DELETE :id/pesajes/intermedios/:fecha`, `DELETE :id/pesajes/:pesajeId`. `GET /lotes/:id`
-   incluye `pesajes[]` (para columnas intermedias y la gráfica de evolución).
+    `DELETE :id/pesajes/intermedios/:fecha`, `DELETE :id/pesajes/:pesajeId`. `GET /lotes/:id`
+    incluye `pesajes[]` (para columnas intermedias y la gráfica de evolución).
+9. **Partidas (tandas de ingreso)**: un lote se carga por tandas; cada `partida` tiene su fecha
+   de carga y su **pesaje inicial**. Los **intermedios/finales son del lote** (todas las partidas
+   se pesan juntas, se exige el peso de todos los animales). `resolverPartidaAlta` al dar de alta
+   animales: con `nuevaPartida` crea una hoy (sin pesar); con `idPartida` une a una existente y,
+   si esa partida ya tiene inicial, EXIGE el peso de los nuevos (a esa fecha) para no distorsionar
+   la gráfica; sin elección reutiliza la partida sin pesar o crea una. Con una sola partida la UI
+   oculta la división. El backfill (migración 008) agrupa por `COALESCE(fecha_pesaje_ini,
+   created_at)`. `GET /lotes/:id` incluye `partidas[]` (nombre derivado, nAnimales, tieneInicial).

@@ -1,5 +1,5 @@
 import {
-  IsDateString,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -40,10 +40,25 @@ export class CreateAnimalDto {
   @Min(1)
   idCategoria?: number | null;
 
+  /**
+   * Partida del alta. `nuevaPartida: true` crea una partida hoy; `idPartida`
+   * une el animal a una existente; si no se indica ninguna, el server reutiliza
+   * la partida sin pesar del lote o crea una nueva.
+   */
   @IsOptional()
-  @IsDateString()
-  fechaPesajeIni?: string;
+  @IsBoolean()
+  nuevaPartida?: boolean;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  idPartida?: number;
+
+  /**
+   * Peso inicial POR ANIMAL. Requerido sólo cuando se une a una partida que ya
+   * tiene pesaje inicial (para no distorsionar la gráfica); la fecha es la de
+   * esa partida.
+   */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   pesoInicial?: number;
@@ -51,18 +66,6 @@ export class CreateAnimalDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   desbasteIni?: number;
-
-  @IsOptional()
-  @IsDateString()
-  fechaPesajeFin?: string;
-
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  pesoFinal?: number;
-
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  desbasteFin?: number;
 
   @IsOptional()
   @IsString()
