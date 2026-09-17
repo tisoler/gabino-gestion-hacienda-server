@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { EntityManager, Repository } from "typeorm";
 import { Alimentacion } from "../entities/alimentacion.entity";
 import { AlimentacionLote } from "../entities/alimentacion-lote.entity";
 import { Corral } from "../entities/corral.entity";
@@ -13,7 +13,19 @@ import { Animal } from "../entities/animal.entity";
 import { Dieta, DietaVersion } from "../entities/dieta.entity";
 import { Roles } from "src/constantes";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
-import { CreateAlimentacionDto } from "./dto/create-alimentacion.dto";
+import {
+  CreateAlimentacionDto,
+  CreateAlimentacionesMasivaDto,
+} from "./dto/create-alimentacion.dto";
+
+/** Fila interna del reparto por lote (antes de armar la vista). */
+export interface RepartoRow {
+  loteId: number;
+  loteNombre: string;
+  idCliente: string | null;
+  nAnimales: number;
+  nAnimalesEnfermeria: number;
+}
 
 export interface RepartoLote {
   loteId: number;
@@ -82,9 +94,9 @@ export class AlimentacionService {
   }
 
   /**
-   * Registra una alimentación de corral: calcula la tasa por animal
-   * (cantidad / animales VIVOS de los lotes del corral, incluyendo los de
-   * enfermería del lote, excluyendo muertos) y guarda el reparto por lote.
+   * Registra una alimentación de corral (una fila = un día): calcula la tasa
+   * por animal (cantidad / animales VIVOS de los lotes del corral, incluyendo
+   * los de enfermería del lote, excluyendo muertos) y guarda el reparto por lote.
    */
   async crear(
     dto: CreateAlimentacionDto,
@@ -94,9 +106,97 @@ export class AlimentacionService {
     if (!empresaId) {
       throw new BadRequestException("No tenés una empresa actual asociada");
     }
+    const { corral, reparto } = await this.prepararCorral(
+      dto.idCorral,
+      empresaId,
+    );
+    const { dieta, version } = await this.validarDieta(dto.idDieta, empresaId);
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    const tasas = this.calcularTasas(Number(dto.cantidadKg), reparto);
 
+    const idAlimentacion =
+      await this.alimentacionRepository.manager.transaction(async (em) => {
+        const alRepo = em.getRepository(Alimentacion);
+        const alLoteRepo = em.getRepository(AlimentacionLote);
+        return this.crearUna(em, alRepo, alLoteRepo, {
+          empresaId,
+          corral,
+          dieta,
+          version,
+          fecha,
+          cantidadCorralKg: Number(dto.cantidadKg),
+          reparto,
+          tasas,
+          idUsuario: user?.id ?? null,
+        });
+      });
+
+    return this.obtenerDetalle(idAlimentacion);
+  }
+
+  /**
+   * Carga VARIAS alimentaciones (filas) en un solo request: mismo corral, cada
+   * fila con su dieta, fecha y cantidad. El reparto se calcula UNA vez (mismo
+   * corral) y todo se guarda en una única transacción.
+   */
+  async crearMasivas(
+    dto: CreateAlimentacionesMasivaDto,
+    user: any,
+  ): Promise<{ creadas: number }> {
+    const empresaId = this.empresaActual(user);
+    if (!empresaId) {
+      throw new BadRequestException("No tenés una empresa actual asociada");
+    }
+    if (dto.filas.length === 0) {
+      throw new BadRequestException("Cargá al menos una fila de alimentación");
+    }
+    const { corral, reparto } = await this.prepararCorral(
+      dto.idCorral,
+      empresaId,
+    );
+    const creadas = await this.alimentacionRepository.manager.transaction(
+      async (em) => {
+        const alRepo = em.getRepository(Alimentacion);
+        const alLoteRepo = em.getRepository(AlimentacionLote);
+        let n = 0;
+        for (const fila of dto.filas) {
+          const { dieta, version } = await this.validarDieta(
+            fila.idDieta,
+            empresaId,
+          );
+          const fecha = this.aDate(fila.fecha);
+          if (!fecha) throw new BadRequestException("Fecha inválida");
+          const tasas = this.calcularTasas(Number(fila.cantidadKg), reparto);
+          await this.crearUna(em, alRepo, alLoteRepo, {
+            empresaId,
+            corral,
+            dieta,
+            version,
+            fecha,
+            cantidadCorralKg: Number(fila.cantidadKg),
+            reparto,
+            tasas,
+            idUsuario: user?.id ?? null,
+          });
+          n += 1;
+        }
+        return n;
+      },
+    );
+    return { creadas };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers del alta
+  // ---------------------------------------------------------------------------
+
+  private async prepararCorral(
+    idCorral: number,
+    empresaId: number,
+  ): Promise<{ corral: Corral; reparto: RepartoRow[] }> {
     const corral = await this.corralRepository.findOne({
-      where: { id: dto.idCorral },
+      where: { id: idCorral },
     });
     if (!corral || corral.idEmpresa !== empresaId || !corral.activo) {
       throw new BadRequestException("El corral indicado no está disponible");
@@ -106,9 +206,22 @@ export class AlimentacionService {
         "Los corrales de enfermería se alimentan a través del corral de su lote",
       );
     }
+    const reparto = await this.calcularReparto(corral);
+    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
+    if (totalNCorral === 0) {
+      throw new BadRequestException(
+        "No hay animales vivos para alimentar en este corral",
+      );
+    }
+    return { corral, reparto };
+  }
 
+  private async validarDieta(
+    idDieta: number,
+    empresaId: number,
+  ): Promise<{ dieta: Dieta; version: DietaVersion }> {
     const dieta = await this.dietaRepository.findOne({
-      where: { id: dto.idDieta },
+      where: { id: idDieta },
       relations: ["versiones"],
     });
     if (
@@ -124,65 +237,82 @@ export class AlimentacionService {
     if (!version) {
       throw new BadRequestException("La dieta no tiene una versión vigente");
     }
+    return { dieta, version };
+  }
 
-    const fecha = dto.fecha ? this.aDate(dto.fecha) : this.hoyDate();
-    if (!fecha) throw new BadRequestException("Fecha inválida");
-
-    // Reparto por lote: vivos EN el corral + vivos en ENFERMERÍA (estimación extra).
-    const reparto = await this.calcularReparto(corral);
+  private calcularTasas(
+    cantidadCorralKg: number,
+    reparto: RepartoRow[],
+  ): {
+    totalNCorral: number;
+    totalNEnfermeria: number;
+    rate: number;
+    cantidadEnfermeria: number;
+    cantidadTotal: number;
+  } {
     const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
     const totalNEnfermeria = reparto.reduce(
       (acc, r) => acc + r.nAnimalesEnfermeria,
       0,
     );
-    if (totalNCorral === 0) {
-      throw new BadRequestException(
-        "No hay animales vivos para alimentar en este corral",
-      );
-    }
-    // Tasa por animal sobre los animales DEL CORRAL; los de enfermería se
-    // SUMAN (estimación a la misma tasa), no se reparten del corral.
-    const rate = Number(dto.cantidadKg) / totalNCorral;
+    const rate = cantidadCorralKg / totalNCorral;
     const cantidadEnfermeria = rate * totalNEnfermeria;
-    const cantidadTotal = Number(dto.cantidadKg) + cantidadEnfermeria;
+    return {
+      totalNCorral,
+      totalNEnfermeria,
+      rate,
+      cantidadEnfermeria,
+      cantidadTotal: cantidadCorralKg + cantidadEnfermeria,
+    };
+  }
 
-    const idAlimentacion =
-      await this.alimentacionRepository.manager.transaction(async (em) => {
-        const alRepo = em.getRepository(Alimentacion);
-        const alLoteRepo = em.getRepository(AlimentacionLote);
-        const al = await alRepo.save(
-          alRepo.create({
-            idEmpresa: empresaId,
-            idCorral: corral.id,
-            idDieta: dieta.id,
-            idDietaVersion: version.id,
-            fecha,
-            cantidadKg: redondear(cantidadTotal, 2),
-            cantidadCorralKg: dto.cantidadKg,
-            cantidadEnfermeriaKg: redondear(cantidadEnfermeria, 2),
-            cantidadPorAnimal: redondear(rate, 4),
-            nAnimales: totalNCorral,
-            nAnimalesEnfermeria: totalNEnfermeria,
-            idUsuario: user?.id ?? null,
-          }),
-        );
-        await alLoteRepo.save(
-          reparto.map((r) =>
-            alLoteRepo.create({
-              idAlimentacion: al.id,
-              idLote: r.loteId,
-              idCliente: r.idCliente,
-              nAnimales: r.nAnimales,
-              cantidadKg: redondear(rate * r.nAnimales, 2),
-              nAnimalesEnfermeria: r.nAnimalesEnfermeria,
-              cantidadEnfermeriaKg: redondear(rate * r.nAnimalesEnfermeria, 2),
-            }),
-          ),
-        );
-        return al.id;
-      });
-
-    return this.obtenerDetalle(idAlimentacion);
+  private async crearUna(
+    em: EntityManager,
+    alRepo: Repository<Alimentacion>,
+    alLoteRepo: Repository<AlimentacionLote>,
+    p: {
+      empresaId: number;
+      corral: Corral;
+      dieta: Dieta;
+      version: DietaVersion;
+      fecha: Date;
+      cantidadCorralKg: number;
+      reparto: RepartoRow[];
+      tasas: ReturnType<AlimentacionService["calcularTasas"]>;
+      idUsuario: string | null;
+    },
+  ): Promise<number> {
+    const t = p.tasas;
+    const al = await alRepo.save(
+      alRepo.create({
+        idEmpresa: p.empresaId,
+        idCorral: p.corral.id,
+        idDieta: p.dieta.id,
+        idDietaVersion: p.version.id,
+        fecha: p.fecha,
+        cantidadKg: redondear(t.cantidadTotal, 2),
+        cantidadCorralKg: p.cantidadCorralKg,
+        cantidadEnfermeriaKg: redondear(t.cantidadEnfermeria, 2),
+        cantidadPorAnimal: redondear(t.rate, 4),
+        nAnimales: t.totalNCorral,
+        nAnimalesEnfermeria: t.totalNEnfermeria,
+        idUsuario: p.idUsuario,
+      }),
+    );
+    await alLoteRepo.save(
+      p.reparto.map((r) =>
+        alLoteRepo.create({
+          idAlimentacion: al.id,
+          idLote: r.loteId,
+          idCliente: r.idCliente,
+          nAnimales: r.nAnimales,
+          cantidadKg: redondear(t.rate * r.nAnimales, 2),
+          nAnimalesEnfermeria: r.nAnimalesEnfermeria,
+          cantidadEnfermeriaKg: redondear(t.rate * r.nAnimalesEnfermeria, 2),
+        }),
+      ),
+    );
+    return al.id;
   }
 
   /**
@@ -191,26 +321,12 @@ export class AlimentacionService {
    *  - nAnimalesEnfermeria = vivos del lote en ENFERMERÍA (estimación extra)
    * Los muertos no cuentan.
    */
-  private async calcularReparto(corral: Corral): Promise<
-    {
-      loteId: number;
-      loteNombre: string;
-      idCliente: string | null;
-      nAnimales: number;
-      nAnimalesEnfermeria: number;
-    }[]
-  > {
+  private async calcularReparto(corral: Corral): Promise<RepartoRow[]> {
     const lotes = await this.loteEntidadRepository.find({
       where: { idCorral: corral.id, activo: true },
       order: { id: "ASC" },
     });
-    const reparto: {
-      loteId: number;
-      loteNombre: string;
-      idCliente: string | null;
-      nAnimales: number;
-      nAnimalesEnfermeria: number;
-    }[] = [];
+    const reparto: RepartoRow[] = [];
     for (const lote of lotes) {
       const nCorral = await this.animalRepository
         .createQueryBuilder("a")

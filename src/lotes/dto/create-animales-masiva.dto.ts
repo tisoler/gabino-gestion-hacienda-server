@@ -40,21 +40,23 @@ export class AnimalMasivoItemDto {
 }
 
 export class CreateAnimalesMasivaDto {
-  /** Catálogo `raza` (opcional). */
+  /** Catálogo `raza` (opcional; se puede editar después por animal/partida/lote). */
   @IsOptional()
   @IsInt()
   @Min(1)
   idRaza?: number;
 
-  /** Catálogo `pelaje` (requerido). */
+  /** Catálogo `pelaje` (opcional; se puede editar después por animal/partida/lote). */
+  @IsOptional()
   @IsInt()
   @Min(1)
-  idPelaje: number;
+  idPelaje?: number;
 
-  /** Catálogo `categoria` (requerido; el sexo se infiere). */
+  /** Catálogo `categoria` (opcional; el sexo se infiere si se setea). */
+  @IsOptional()
   @IsInt()
   @Min(1)
-  idCategoria: number;
+  idCategoria?: number;
 
   @IsInt()
   @Min(1)

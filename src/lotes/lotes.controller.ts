@@ -28,6 +28,7 @@ import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { CreateSalidaDto } from "./dto/create-salida.dto";
+import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -99,6 +100,23 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.addAnimal(id, dto, req.user);
+  }
+
+  @Post(":id/animales/edicion-masiva")
+  @Permissions("escritura:lote")
+  @ApiOperation({
+    summary: "Edición en masa de raza/categoría/pelaje (lote o partida)",
+    description:
+      "Aplica sólo los campos enviados a todos los animales del alcance " +
+      "('lote' o 'partida'). Los catálogos deben ser globales o de la empresa.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  edicionMasiva(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: EdicionMasivaDto,
+    @Request() req,
+  ) {
+    return this.lotesService.edicionMasivaAnimales(id, dto, req.user);
   }
 
   @Post(":id/animales/masiva")

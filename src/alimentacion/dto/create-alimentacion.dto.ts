@@ -1,16 +1,13 @@
+import { Type } from "class-transformer";
 import {
   IsDateString,
   IsInt,
   IsNumber,
-  IsOptional,
   Min,
+  ValidateNested,
 } from "class-validator";
 
-export class CreateAlimentacionDto {
-  @IsInt()
-  @Min(1)
-  idCorral: number;
-
+export class FilaAlimentacionDto {
   @IsInt()
   @Min(1)
   idDieta: number;
@@ -19,8 +16,22 @@ export class CreateAlimentacionDto {
   @Min(0.01, { message: "La cantidad debe ser mayor que 0" })
   cantidadKg: number;
 
-  /** Fecha de la alimentación (default hoy si no viene). */
-  @IsOptional()
   @IsDateString()
-  fecha?: string;
+  fecha: string;
+}
+
+export class CreateAlimentacionDto extends FilaAlimentacionDto {
+  @IsInt()
+  @Min(1)
+  idCorral: number;
+}
+
+export class CreateAlimentacionesMasivaDto {
+  @IsInt()
+  @Min(1)
+  idCorral: number;
+
+  @Type(() => FilaAlimentacionDto)
+  @ValidateNested({ each: true })
+  filas: FilaAlimentacionDto[];
 }

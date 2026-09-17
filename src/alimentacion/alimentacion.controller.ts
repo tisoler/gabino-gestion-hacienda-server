@@ -14,7 +14,10 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { AlimentacionService, AlimentacionView } from "./alimentacion.service";
-import { CreateAlimentacionDto } from "./dto/create-alimentacion.dto";
+import {
+  CreateAlimentacionDto,
+  CreateAlimentacionesMasivaDto,
+} from "./dto/create-alimentacion.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -64,5 +67,20 @@ export class AlimentacionController {
     @Request() req,
   ): Promise<AlimentacionView> {
     return this.service.crear(dto, req.user);
+  }
+
+  @Post("masiva")
+  @Permissions("escritura:alimento")
+  @ApiOperation({
+    summary: "Alimentar un corral con varias filas (mismo corral)",
+    description:
+      "Cada fila trae dieta, fecha y cantidad. El reparto se calcula una vez " +
+      "(mismo corral) y todo se guarda en una transacción.",
+  })
+  crearMasivas(
+    @Body() dto: CreateAlimentacionesMasivaDto,
+    @Request() req,
+  ): Promise<{ creadas: number }> {
+    return this.service.crearMasivas(dto, req.user);
   }
 }

@@ -22,6 +22,7 @@ import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { CreateSalidaDto } from "./dto/create-salida.dto";
+import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
 import { Salida } from "../entities/salida.entity";
 import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
@@ -668,18 +669,22 @@ export class LotesService {
         "La cantidad no coincide con las caravanas ingresadas",
       );
     }
-    await this.catalogos.validarValor(
-      "pelaje",
-      dto.idPelaje,
-      lote.idEmpresa,
-      "pelaje",
-    );
-    await this.catalogos.validarValor(
-      "categoria",
-      dto.idCategoria,
-      lote.idEmpresa,
-      "categoría",
-    );
+    if (dto.idPelaje != null) {
+      await this.catalogos.validarValor(
+        "pelaje",
+        dto.idPelaje,
+        lote.idEmpresa,
+        "pelaje",
+      );
+    }
+    if (dto.idCategoria != null) {
+      await this.catalogos.validarValor(
+        "categoria",
+        dto.idCategoria,
+        lote.idEmpresa,
+        "categoría",
+      );
+    }
     if (dto.idRaza != null) {
       await this.catalogos.validarValor(
         "raza",
@@ -730,9 +735,9 @@ export class LotesService {
           nAnimal: item.nAnimal ?? next++,
           caravana: item.caravana.trim(),
           idPartida: partida.id,
-          idPelaje: dto.idPelaje,
+          idPelaje: dto.idPelaje ?? null,
           idRaza: dto.idRaza ?? null,
-          idCategoria: dto.idCategoria,
+          idCategoria: dto.idCategoria ?? null,
           observaciones: dto.observaciones ?? null,
           estado: "sano",
           idCorralEnfermeria: null,
@@ -1434,6 +1439,104 @@ export class LotesService {
       { idCorralEnfermeria: null },
     );
     await this.loteRepository.update({ id: idLote }, { idCorral: null });
+  }
+
+  /**
+   * Edición en masa de raza/categoría/pelaje para los animales del lote o de
+   * una partida. Cada entrada de `valores` trae los campos a cambiar por animal
+   * (ausente = no cambia, null = limpia, número = setea). Valida los catálogos
+   * usados (globales o de la empresa).
+   */
+  async edicionMasivaAnimales(
+    idLote: number,
+    dto: EdicionMasivaDto,
+    user: any,
+  ): Promise<{ actualizados: number }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    if (dto.alcance === "partida") {
+      if (!dto.idPartida) {
+        throw new BadRequestException("Indicá la partida");
+      }
+      const partida = await this.partidaRepository.findOne({
+        where: { id: dto.idPartida, idLote: lote.id },
+      });
+      if (!partida) {
+        throw new BadRequestException(
+          "La partida indicada no pertenece a este lote",
+        );
+      }
+    }
+
+    const donde: any = { idLote: lote.id };
+    if (dto.idPartida != null) donde.idPartida = dto.idPartida;
+    const animales = await this.animalRepository.find({ where: donde });
+    const byId = new Map(animales.map((a) => [a.id, a]));
+    if (animales.length === 0) {
+      throw new BadRequestException("No hay animales en este alcance");
+    }
+
+    // Validar catálogos usados (distintos ids), una sola vez cada uno.
+    const razaIds = new Set<number>();
+    const catIds = new Set<number>();
+    const pelajeIds = new Set<number>();
+    for (const v of dto.valores) {
+      if (v.idRaza != null) razaIds.add(v.idRaza);
+      if (v.idCategoria != null) catIds.add(v.idCategoria);
+      if (v.idPelaje != null) pelajeIds.add(v.idPelaje);
+    }
+    for (const id of razaIds) {
+      await this.catalogos.validarValor("raza", id, lote.idEmpresa, "raza");
+    }
+    for (const id of catIds) {
+      await this.catalogos.validarValor(
+        "categoria",
+        id,
+        lote.idEmpresa,
+        "categoría",
+      );
+    }
+    for (const id of pelajeIds) {
+      await this.catalogos.validarValor("pelaje", id, lote.idEmpresa, "pelaje");
+    }
+
+    // Aplicar cambios por animal (ausente = no toca).
+    let actualizados = 0;
+    const cambiosPorId = new Map<
+      number,
+      {
+        idRaza?: number | null;
+        idCategoria?: number | null;
+        idPelaje?: number | null;
+      }
+    >();
+    for (const v of dto.valores) {
+      if (!byId.has(v.animalId)) {
+        throw new BadRequestException(
+          "Un animal indicado no pertenece al lote/partida",
+        );
+      }
+      const prev = cambiosPorId.get(v.animalId) ?? {};
+      cambiosPorId.set(v.animalId, {
+        ...prev,
+        ...(v.idRaza !== undefined ? { idRaza: v.idRaza } : {}),
+        ...(v.idCategoria !== undefined ? { idCategoria: v.idCategoria } : {}),
+        ...(v.idPelaje !== undefined ? { idPelaje: v.idPelaje } : {}),
+      });
+    }
+
+    for (const a of animales) {
+      const cambios = cambiosPorId.get(a.id);
+      if (!cambios) continue;
+      const fila: any = {};
+      if (cambios.idRaza !== undefined) fila.idRaza = cambios.idRaza;
+      if (cambios.idCategoria !== undefined)
+        fila.idCategoria = cambios.idCategoria;
+      if (cambios.idPelaje !== undefined) fila.idPelaje = cambios.idPelaje;
+      if (Object.keys(fila).length === 0) continue;
+      await this.animalRepository.update({ id: a.id }, fila);
+      actualizados += 1;
+    }
+    return { actualizados };
   }
 
   /** Edita un pesaje puntual (peso/desbaste/fecha). Recalcula la proyección. */

@@ -101,8 +101,11 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `GET /lotes/:id` (con animales, incl. raza/categoría/pelaje y `sexo` inferido) ·
   `PATCH /lotes/:id` · `POST /lotes/:id/animales` (`caravana` + `idPelaje` requeridos;
   `idRaza`/`idCategoria` opcionales; `nAnimal` auto = último del lote + 1) ·
-  `POST /lotes/:id/animales/masiva` (carga masiva: raza opt + pelaje + categoría requeridos,
+  `POST /lotes/:id/animales/masiva` (carga masiva: raza/pelaje/categoría **opcionales**,
   cantidad + caravanas, peso inicial por `modoInicial` total/animal, en una transacción) ·
+  `POST /lotes/:id/animales/edicion-masiva` (raza/categoría/pelaje por animal del lote o de
+  una partida: `{ alcance, idPartida?, valores: [{animalId, idRaza?, idCategoria?, idPelaje?}] }`
+  con campo ausente = no cambia, `null` = limpia, número = setea; catálogos validados) ·
   `PATCH /lotes/:id/animales/:animalId` (incluye `estado` + `idMotivo`/`motivo` para el
   historial) · `DELETE /lotes/:id/animales/:animalId` ·
   `POST /lotes/:id/animales/:animalId/enfermeria` (motivo obligatorio → estado 'enfermo') ·
@@ -164,10 +167,12 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   gestiona el sys-admin. Ingredientes por catálogo `ingrediente` (`/catalogos/ingrediente`; una
   dieta global sólo admite ingredientes globales). La suma de % debe ser 100 (server). Ver
   decisión 10 de DESIGN.
-- **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones`
-  (`escritura:alimento`) con `{ idCorral, idDieta, cantidadKg, fecha }` — sólo corrales COMUNES
-  (las enfermerías se alimentan a través del corral de su lote). La `cantidadKg` es la del
-  CORRAL: se reparte entre los lotes del corral según sus animales VIVOS presentes
+- **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones` (`escritura:alimento`)
+  con `{ idCorral, idDieta, cantidadKg, fecha }` (una alimentación) y
+  `POST /alimentaciones/masiva` con `{ idCorral, filas: [{ idDieta, cantidadKg, fecha }] }`
+  (varias filas, mismo corral, en una transacción) — sólo corrales COMUNES (las enfermerías se
+  alimentan a través del corral de su lote). La `cantidadKg` es la del CORRAL y se reparte por
+  fila. se reparte entre los lotes del corral según sus animales VIVOS presentes
   (`estado IN ('sano','enfermo')` y `id_corral_enfermeria IS NULL`). Los animales del lote en
   ENFERMERÍA reciben una ESTIMACIÓN extra a la misma tasa por animal (se SUMAN al total, no se
   reparten del corral): `cantidad_corral_kg` (ingresada) + `cantidad_enfermeria_kg` =
