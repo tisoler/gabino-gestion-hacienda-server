@@ -16,6 +16,7 @@ export const CATALOGO_TIPOS = [
   "proveedor",
   "lugar_origen",
   "motivo",
+  "ingrediente",
 ] as const;
 export type CatalogoTipo = (typeof CATALOGO_TIPOS)[number];
 
@@ -27,8 +28,8 @@ export const MOVIMIENTO_TIPOS = [
 ] as const;
 export type MovimientoTipo = (typeof MOVIMIENTO_TIPOS)[number];
 
-/** Estados sanitarios del animal. */
-export const ANIMAL_ESTADOS = ["sano", "enfermo", "muerto"] as const;
+/** Estados sanitarios del animal. 'salido' = egresó (salida), ya no cuenta. */
+export const ANIMAL_ESTADOS = ["sano", "enfermo", "muerto", "salido"] as const;
 
 export type Role = (typeof Roles)[keyof typeof Roles];
 

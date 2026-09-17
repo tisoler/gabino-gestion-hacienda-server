@@ -122,14 +122,17 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   cada cambio, `proyectarAnimal(es)` recalcula las columnas de peso de `animal`
   (inicial/final/netos y **diferencia = peso final − peso inicial, BRUTOS**); el **aum. diario
   no se persiste**: lo calcula `calcularAumDiario` en `GET /lotes/:id` usando el pesaje `final`
-  si existe, si no el último por fecha. Ver decisión 8 de DESIGN.
+  si existe, si no el último por fecha. Los objetivos de pesaje (inicial/intermedio/final)
+  EXCLUYEN muertos y salidos (`estado IN ('sano','enfermo')`); en el FINAL los animales ya
+  salidos se conservan con su peso registrado en la salida. Ver decisión 8 de DESIGN.
 - **partidas** (parte de `lotes`; tandas de ingreso): tabla `partida` (id_lote, fecha de carga)
   + `animal.id_partida`. El nombre ("Partida N") se deriva por orden de fecha/id. Al dar de alta
   animales, `resolverPartidaAlta`: `nuevaPartida` (crea hoy, sin pesar) / `idPartida` (une; si la
   partida ya tiene inicial, EXIGE los pesos nuevos a esa fecha) / ninguno (reutiliza la partida
   sin pesar o crea una). `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
-  con `lotesOcupantes[]`, pueden compartirse) ·
+  con `lotesOcupantes[]`, pueden compartirse; incluye `tieneVivos` = hay animales con estado
+  sano/enfermo, para filtrar "alimentables" en el modal) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteIds[]` de los
   lotes del común para validar drag & drop; requiere `lectura:lote`, no `lectura:corral`) ·
   `GET /corrales/enfermerias` (picker) · `POST /corrales` ·
@@ -138,7 +141,9 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   deshabilitar comunes con lotes activos / enfermerías con animales). `GET /corrales` y
   `/corrales/enfermerias` están
   restringidos a no-clientes (`@Roles`); el cliente usa sólo `/corrales/mapa`, que se filtra
-  a sus lotes y animales (regla 8), con enfermería siempre visible.
+  a sus lotes y animales (regla 8), con enfermería siempre visible. Los corrales se ordenan por
+  **nombre natural** (alfabético; numérico si tienen números: "Corral 2" < "Corral 10"),
+  preservando el agrupamiento por tipo.
 - **usuarios**: `POST /usuarios/bootstrap` (sin rol, pendiente) · `GET /usuarios/candidatos` ·
   `PATCH /usuarios/:uid/rol` (sys-admin asigna anfitrión/operario/cliente) ·
   `PATCH /usuarios/:uid/nombre|celular`.
@@ -149,6 +154,37 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `idRaza` asocia el pelaje a la raza) · `GET /catalogos/:tipo/admin?scope=todas|global|empresa&idEmpresa=` y
   `POST /catalogos/:tipo/admin { nombre, idEmpresa|null, sexo? }` (sólo sys-admin; `idEmpresa` null =
   global). Ver reglas 9 y 10.
+- **dietas** (módulo de alimentación): `GET /dietas?estado=activas|todas` (`lectura:dieta`;
+  `todas` requiere `escritura:dieta`) devuelve cada dieta con su versión vigente e
+  ingredientes (incluye las GLOBALES, `id_empresa` NULL) · `POST /dietas` (`escritura:dieta`)
+  crea dieta o NUEVA versión si ya existe el nombre en el mismo alcance (versiona: desactiva la
+  anterior). El **sys-admin** puede crear para Global (`idEmpresa: null`) o una empresa
+  (`idEmpresa: n`); el resto sólo para la suya. `GET /dietas/:id/versiones` (histórico) y
+  `PATCH /dietas/:id/activo` (activa/desactiva la dieta ENTERA) — las dietas globales sólo las
+  gestiona el sys-admin. Ingredientes por catálogo `ingrediente` (`/catalogos/ingrediente`; una
+  dieta global sólo admite ingredientes globales). La suma de % debe ser 100 (server). Ver
+  decisión 10 de DESIGN.
+- **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones`
+  (`escritura:alimento`) con `{ idCorral, idDieta, cantidadKg, fecha }` — sólo corrales COMUNES
+  (las enfermerías se alimentan a través del corral de su lote). La `cantidadKg` es la del
+  CORRAL: se reparte entre los lotes del corral según sus animales VIVOS presentes
+  (`estado IN ('sano','enfermo')` y `id_corral_enfermeria IS NULL`). Los animales del lote en
+  ENFERMERÍA reciben una ESTIMACIÓN extra a la misma tasa por animal (se SUMAN al total, no se
+  reparten del corral): `cantidad_corral_kg` (ingresada) + `cantidad_enfermeria_kg` =
+  `cantidad_kg` total; `n_animales`/`n_animales_enfermeria` y el mismo desglose por lote en
+  `alimentacion_lote`. `GET /alimentaciones` (`lectura:alimento`) lista el histórico con filtros
+  `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta`. Base del reporte de costo.
+  Ver el modelo en DESIGN.
+- **salidas** (egreso/entrega de animales + histórico): `POST /lotes/:id/salidas`
+  (`escritura:salida`) con `{ fecha, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
+  [{animalId, pesoFinal?, desbaste?}] }`. Salen animales VIVOS (sano/enfermo); 'lote'/'partida'
+  exigen el grupo completo. El grupo debe tener pesaje FINAL (se crea con la fecha de la salida
+  si falta; el item exige `pesoFinal`). Crea `salida` + `salida_animal` (snapshot de pesos y
+  diferencia), pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral
+  (limpia `lote.id_corral` y las enfermerías de sus animales — "se quitan los muertos del
+  corral"). `GET /salidas` (`lectura:salida`) lista el histórico con filtros
+  `idLote`/`idPartida`/`idCliente`/`fechaDesde`/`fechaHasta` y desglose por animal
+  (inicial → final + diferencia). Ver el modelo en DESIGN.
 
 ## Convenciones
 
@@ -161,8 +197,16 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 | Rol | Permisos |
 |---|---|
 | `sys-admin` | todos |
-| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral` |
-| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral` |
+| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida` |
+| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
+
+`lectura:dieta` ve sólo dietas activas; `escritura:dieta` ve todas las versiones,
+crea/versiona y activa/desactiva dietas enteras. `lectura:alimento` ve el histórico de
+alimentación; `escritura:alimento` registra alimentaciones. `lectura:salida` ve el histórico de
+salidas; `escritura:salida` da salida a animales.
+
+**Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w` a los roles
+1, 2 y 3 (además de los ya documentados `p_dieta_r/w` y `p_alimento_r/w`).
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

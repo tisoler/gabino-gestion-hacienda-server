@@ -27,6 +27,8 @@ export interface CorralResumen {
   lotesOcupantes: { id: number; nombre: string; color: string | null }[];
   /** Comunes: animales de los lotes ocupantes. Enfermería: animales adentro. */
   nAnimales: number;
+  /** ¿Tiene al menos un animal vivo (estado IN ('sano','enfermo'))? */
+  tieneVivos: boolean;
 }
 
 export interface TokenAnimal {
@@ -73,6 +75,7 @@ export class CorralesService {
       where: { idEmpresa: empresaId },
       order: { tipo: "ASC", nombre: "ASC" },
     });
+    this.ordenarNombresNatural(corrals);
     if (corrals.length === 0) return [];
 
     // Lotes activos que comparten cada corral común (puede haber más de uno).
@@ -92,6 +95,7 @@ export class CorralesService {
     // Conteo de animales por lote (para comunes) y por enfermería.
     const loteIds = lotes.map((l) => l.id);
     const conteoLote = new Map<number, number>();
+    const conteoVivoLote = new Map<number, number>();
     if (loteIds.length > 0) {
       const rows = await this.animalRepository
         .createQueryBuilder("a")
@@ -101,8 +105,21 @@ export class CorralesService {
         .groupBy("a.idLote")
         .getRawMany();
       for (const r of rows) conteoLote.set(Number(r.idLote), Number(r.n));
+      const rowsVivos = await this.animalRepository
+        .createQueryBuilder("a")
+        .select("a.idLote", "idLote")
+        .addSelect("COUNT(*)", "n")
+        .where("a.idLote IN (:...ids) AND a.estado IN ('sano','enfermo')", {
+          ids: loteIds,
+        })
+        .groupBy("a.idLote")
+        .getRawMany();
+      for (const r of rowsVivos) {
+        conteoVivoLote.set(Number(r.idLote), Number(r.n));
+      }
     }
     const conteoEnfermeria = new Map<number, number>();
+    const conteoVivoEnfermeria = new Map<number, number>();
     const rowsEnf = await this.animalRepository
       .createQueryBuilder("a")
       .select("a.idCorralEnfermeria", "corralId")
@@ -115,6 +132,20 @@ export class CorralesService {
       .getRawMany();
     for (const r of rowsEnf) {
       conteoEnfermeria.set(Number(r.corralId), Number(r.n));
+    }
+    const rowsEnfVivos = await this.animalRepository
+      .createQueryBuilder("a")
+      .select("a.idCorralEnfermeria", "corralId")
+      .addSelect("COUNT(*)", "n")
+      .innerJoin("a.lote", "lote")
+      .where(
+        "lote.idEmpresa = :e AND a.idCorralEnfermeria IS NOT NULL AND a.estado IN ('sano','enfermo')",
+        { e: empresaId },
+      )
+      .groupBy("a.idCorralEnfermeria")
+      .getRawMany();
+    for (const r of rowsEnfVivos) {
+      conteoVivoEnfermeria.set(Number(r.corralId), Number(r.n));
     }
 
     return corrals.map((c) => {
@@ -129,12 +160,16 @@ export class CorralesService {
           estado: "enfermeria",
           lotesOcupantes: [],
           nAnimales: conteoEnfermeria.get(c.id) ?? 0,
+          tieneVivos: (conteoVivoEnfermeria.get(c.id) ?? 0) > 0,
         };
       }
       const ocupantes = ocupantesByCorral.get(c.id) ?? [];
       const nAnimales = ocupantes.reduce(
         (acc, l) => acc + (conteoLote.get(l.id) ?? 0),
         0,
+      );
+      const tieneVivos = ocupantes.some(
+        (l) => (conteoVivoLote.get(l.id) ?? 0) > 0,
       );
       return {
         id: c.id,
@@ -151,6 +186,7 @@ export class CorralesService {
           color: l.color,
         })),
         nAnimales,
+        tieneVivos,
       };
     });
   }
@@ -237,6 +273,7 @@ export class CorralesService {
       where: { idEmpresa: empresaId, activo: true },
       order: { tipo: "ASC", nombre: "ASC" },
     });
+    this.ordenarNombresNatural(corrals);
 
     const items = await Promise.all(
       corrals.map(async (c) => {
@@ -244,7 +281,10 @@ export class CorralesService {
         let loteIds: number[] = [];
         if (c.tipo === "enfermeria") {
           const adentro = await this.animalRepository.find({
-            where: { idCorralEnfermeria: c.id },
+            where: {
+              idCorralEnfermeria: c.id,
+              estado: In(["sano", "enfermo", "muerto"]),
+            },
             relations: ["lote"],
             order: { nAnimal: "ASC", id: "ASC" },
           });
@@ -267,7 +307,11 @@ export class CorralesService {
           loteIds = visibles.map((l) => l.id);
           if (loteIds.length > 0) {
             const delLote = await this.animalRepository.find({
-              where: { idLote: In(loteIds), idCorralEnfermeria: IsNull() },
+              where: {
+                idLote: In(loteIds),
+                idCorralEnfermeria: IsNull(),
+                estado: In(["sano", "enfermo", "muerto"]),
+              },
               relations: ["lote"],
               order: { nAnimal: "ASC", id: "ASC" },
             });
@@ -289,18 +333,30 @@ export class CorralesService {
   }
 
   /** Corrales de enfermería activos de la empresa (para el picker). */
-  findEnfermerias(user: any): Promise<Corral[]> {
+  async findEnfermerias(user: any): Promise<Corral[]> {
     const empresaId = this.empresaActual(user);
-    if (!empresaId) return Promise.resolve([]);
-    return this.corralRepository.find({
+    if (!empresaId) return [];
+    const enfermerias = await this.corralRepository.find({
       where: { idEmpresa: empresaId, tipo: "enfermeria", activo: true },
       order: { nombre: "ASC" },
     });
+    return this.ordenarNombresNatural(enfermerias);
   }
 
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Orden natural de nombres: alfabético, pero si tienen partes numéricas se
+   * comparan numéricamente (p.ej. "Corral 2" < "Corral 10"). Estable: preserva
+   * el orden previo (por tipo) para elementos de distinto tipo.
+   */
+  private ordenarNombresNatural<T extends { nombre: string }>(items: T[]): T[] {
+    const cmp = (a: string, b: string) =>
+      a.localeCompare(b, "es", { numeric: true, sensitivity: "base" });
+    return items.sort((x, y) => cmp(x.nombre, y.nombre));
+  }
 
   private empresaActual(user: any): number | null {
     const id = user.currentEmpresaId ?? null;

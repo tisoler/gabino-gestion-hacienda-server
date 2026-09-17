@@ -85,3 +85,7 @@ export class Pelaje extends CatalogoBase {
 /** Motivo/causa sanitaria de un movimiento o cambio de estado del animal. */
 @Entity("motivo")
 export class Motivo extends CatalogoBase {}
+
+/** Ingrediente de una dieta (maíz, silaje, ...). Catálogo multitenant. */
+@Entity("ingrediente")
+export class Ingrediente extends CatalogoBase {}

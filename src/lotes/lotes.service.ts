@@ -21,6 +21,9 @@ import { CreateAnimalesMasivaDto } from "./dto/create-animales-masiva.dto";
 import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
+import { CreateSalidaDto } from "./dto/create-salida.dto";
+import { Salida } from "../entities/salida.entity";
+import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { CatalogosService } from "../catalogos/catalogos.service";
 
@@ -63,6 +66,10 @@ export class LotesService {
     private pesajeRepository: Repository<Pesaje>,
     @InjectRepository(Partida)
     private partidaRepository: Repository<Partida>,
+    @InjectRepository(Salida)
+    private salidaRepository: Repository<Salida>,
+    @InjectRepository(SalidaAnimal)
+    private salidaAnimalRepository: Repository<SalidaAnimal>,
     private cache: FirestoreCacheService,
     private catalogos: CatalogosService,
   ) {}
@@ -1108,7 +1115,12 @@ export class LotesService {
 
     // Objetivo: el INICIAL es por partida (si se indica idPartida); los
     // INTERMEDIOS/FINALES son de todo el lote (las partidas se pesan juntas).
-    const dondeAnimales: any = { idLote: lote.id };
+    // Sólo animales NO muertos y NO salidos: muertos y egresados no se pesan
+    // (regla de salidas; los egresados conservan su peso registrado en la salida).
+    const dondeAnimales: any = {
+      idLote: lote.id,
+      estado: In(["sano", "enfermo"]),
+    };
     if (tipo === "inicial" && dto.idPartida) {
       const partida = await this.partidaRepository.findOne({
         where: { id: dto.idPartida, idLote: lote.id },
@@ -1220,6 +1232,208 @@ export class LotesService {
     // 2) Proyección BULK de los animales afectados.
     await this.proyectarAnimales(ids);
     return { actualizados: ids.length };
+  }
+
+  /**
+   * Da salida a animales NO muertos de un lote (total o parcial):
+   *  - `tipo: 'lote'` → todos los vivos (sano/enfermo) del lote.
+   *  - `tipo: 'partida'` → todos los vivos de la partida.
+   *  - `tipo: 'animales'` → los indicados.
+   * El grupo que sale DEBE tener pesaje final: si falta, se exige `pesoFinal`
+   * en el item y se crea el pesaje 'final' con la fecha de la salida. Crea la
+   * `salida` + `salida_animal` (snapshot), pasa el estado a 'salido' y, si el
+   * lote queda sin vivos, quita los muertos del corral (libera el corral).
+   */
+  async darSalida(
+    idLote: number,
+    dto: CreateSalidaDto,
+    user: any,
+  ): Promise<{ id: number; nAnimales: number; diferenciaKg: number }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha de salida inválida");
+
+    // Grupo: vivos (sano/enfermo) del lote o de la partida.
+    const dondeVivos: any = {
+      idLote: lote.id,
+      estado: In(["sano", "enfermo"]),
+    };
+    if (dto.tipo === "partida") {
+      if (!dto.idPartida) {
+        throw new BadRequestException("Indicá la partida que sale");
+      }
+      const partida = await this.partidaRepository.findOne({
+        where: { id: dto.idPartida, idLote: lote.id },
+      });
+      if (!partida) {
+        throw new BadRequestException(
+          "La partida indicada no pertenece a este lote",
+        );
+      }
+      dondeVivos.idPartida = dto.idPartida;
+    }
+    const vivos = await this.animalRepository.find({
+      where: dondeVivos,
+      order: { nAnimal: "ASC", id: "ASC" },
+    });
+    if (vivos.length === 0) {
+      throw new BadRequestException(
+        "No hay animales vivos para dar salida en este lote/partida",
+      );
+    }
+    const vivosById = new Map(vivos.map((a) => [a.id, a]));
+
+    // Items: sin repetidos y pertenecientes al grupo.
+    const items = new Map<number, CreateSalidaDto["animales"][number]>();
+    for (const r of dto.animales) {
+      if (items.has(r.animalId)) {
+        throw new BadRequestException("Hay un animal repetido en la salida");
+      }
+      const a = vivosById.get(r.animalId);
+      if (!a) {
+        throw new BadRequestException(
+          "Un animal indicado no está vivo en el lote/partida",
+        );
+      }
+      items.set(r.animalId, r);
+    }
+    if (items.size === 0) {
+      throw new BadRequestException(
+        "Indicá al menos un animal para dar salida",
+      );
+    }
+    // 'lote'/'partida' exigen el grupo completo (no una selección parcial).
+    if (dto.tipo !== "animales" && items.size !== vivos.length) {
+      throw new BadRequestException(
+        "La salida del lote/partida debe incluir todos sus animales vivos",
+      );
+    }
+
+    // Pesaje final existente por animal; si falta, el item debe traer pesoFinal.
+    const finales = await this.pesajeRepository.find({
+      where: {
+        idAnimal: In(Array.from(items.keys())),
+        tipo: "final",
+      },
+    });
+    const finalByAnimal = new Map(finales.map((p) => [p.idAnimal, p]));
+    for (const [animalId, r] of items) {
+      const sinFinal = !finalByAnimal.has(animalId);
+      if (sinFinal && (r.pesoFinal == null || Number(r.pesoFinal) <= 0)) {
+        throw new BadRequestException(
+          "Ingresá el peso final de los animales que aún no lo tienen",
+        );
+      }
+    }
+
+    const redondear = (n: number) => Math.round(n * 100) / 100;
+    const idsSalientes = Array.from(items.keys());
+    const resultado = await this.salidaRepository.manager.transaction(
+      async (em) => {
+        const pesajeRepo = em.getRepository(Pesaje);
+        const salidaRepo = em.getRepository(Salida);
+        const salidaAnimalRepo = em.getRepository(SalidaAnimal);
+
+        // 1) Crear pesajes 'final' faltantes (fecha = salida).
+        const nuevos: Pesaje[] = [];
+        for (const [animalId, r] of items) {
+          if (finalByAnimal.has(animalId)) continue;
+          const peso = Number(r.pesoFinal);
+          const desbaste = Number(r.desbaste ?? 0);
+          nuevos.push(
+            pesajeRepo.create({
+              idAnimal: animalId,
+              tipo: "final",
+              fecha,
+              peso,
+              desbaste,
+              pesoNeto: redondear(peso - desbaste),
+            }),
+          );
+        }
+        if (nuevos.length > 0) await pesajeRepo.save(nuevos);
+
+        // 2) Snapshot por animal + totales.
+        const rows = Array.from(items.entries()).map(([animalId, r]) => {
+          const a = vivosById.get(animalId)!;
+          const fin = finalByAnimal.get(animalId);
+          const pesoFinal = fin ? Number(fin.peso) : Number(r.pesoFinal);
+          const pesoInicial =
+            a.pesoInicial != null ? Number(a.pesoInicial) : null;
+          const diferencia =
+            pesoInicial != null ? redondear(pesoFinal - pesoInicial) : 0;
+          return { animalId, pesoInicial, pesoFinal, diferencia };
+        });
+        const pesoInicialTotal = redondear(
+          rows.reduce((s, r) => s + (r.pesoInicial ?? 0), 0),
+        );
+        const pesoFinalTotal = redondear(
+          rows.reduce((s, r) => s + r.pesoFinal, 0),
+        );
+        const diferenciaKg = redondear(
+          rows.reduce((s, r) => s + r.diferencia, 0),
+        );
+
+        const salida = await salidaRepo.save(
+          salidaRepo.create({
+            idEmpresa: lote.idEmpresa,
+            idLote: lote.id,
+            idPartida: dto.tipo === "partida" ? dto.idPartida! : null,
+            fecha,
+            tipo: dto.tipo,
+            nAnimales: rows.length,
+            pesoInicialTotal,
+            pesoFinalTotal,
+            diferenciaKg,
+            idUsuario: user?.id ?? null,
+          }),
+        );
+        await salidaAnimalRepo.save(
+          rows.map((r) =>
+            salidaAnimalRepo.create({
+              idSalida: salida.id,
+              idAnimal: r.animalId,
+              pesoInicial: r.pesoInicial,
+              pesoFinal: r.pesoFinal,
+              diferenciaKg: r.diferencia,
+            }),
+          ),
+        );
+
+        // 3) Estado 'salido' y salir de enfermería (si estaba).
+        await em
+          .getRepository(Animal)
+          .update(
+            { id: In(idsSalientes) },
+            { estado: "salido", idCorralEnfermeria: null },
+          );
+
+        return { id: salida.id, nAnimales: rows.length, diferenciaKg };
+      },
+    );
+
+    // 4) Proyección de los animales (peso_final/neto/diferencia) y, si el lote
+    // quedó sin vivos, quitar los muertos del corral (liberar corral/enfermería).
+    await this.proyectarAnimales(idsSalientes);
+    await this.quitarMuertosSiLoteSinVivos(lote.id);
+    return resultado;
+  }
+
+  /**
+   * Si el lote ya no tiene animales vivos (sano/enfermo), se "quitan los muertos
+   * del corral": el lote sale de su corral y sus animales dejan de ocupar
+   * enfermerías, dejando el corral libre.
+   */
+  private async quitarMuertosSiLoteSinVivos(idLote: number) {
+    const vivos = await this.animalRepository.count({
+      where: { idLote, estado: In(["sano", "enfermo"]) },
+    });
+    if (vivos > 0) return;
+    await this.animalRepository.update(
+      { idLote },
+      { idCorralEnfermeria: null },
+    );
+    await this.loteRepository.update({ id: idLote }, { idCorral: null });
   }
 
   /** Edita un pesaje puntual (peso/desbaste/fecha). Recalcula la proyección. */

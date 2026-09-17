@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import {
   Categoria,
+  Ingrediente,
   LugarOrigen,
   Motivo,
   Pelaje,
@@ -21,6 +22,7 @@ import { CatalogosController } from "./catalogos.controller";
       Proveedor,
       LugarOrigen,
       Motivo,
+      Ingrediente,
       Empresa,
     ]),
   ],

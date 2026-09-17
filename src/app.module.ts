@@ -9,6 +9,9 @@ import { UsuariosModule } from "./usuarios/usuarios.module";
 import { LotesModule } from "./lotes/lotes.module";
 import { CorralesModule } from "./corrales/corrales.module";
 import { CatalogosModule } from "./catalogos/catalogos.module";
+import { DietasModule } from "./dietas/dietas.module";
+import { AlimentacionModule } from "./alimentacion/alimentacion.module";
+import { SalidasModule } from "./salidas/salidas.module";
 
 import { Empresa } from "./entities/empresa.entity";
 import { EmpresaCliente } from "./entities/empresa-cliente.entity";
@@ -20,12 +23,22 @@ import { Pesaje } from "./entities/pesaje.entity";
 import { Partida } from "./entities/partida.entity";
 import {
   Categoria,
+  Ingrediente,
   LugarOrigen,
   Motivo,
   Pelaje,
   Proveedor,
   Raza,
 } from "./entities/catalogo.entity";
+import {
+  Dieta,
+  DietaVersion,
+  DietaVersionIngrediente,
+} from "./entities/dieta.entity";
+import { Alimentacion } from "./entities/alimentacion.entity";
+import { AlimentacionLote } from "./entities/alimentacion-lote.entity";
+import { Salida } from "./entities/salida.entity";
+import { SalidaAnimal } from "./entities/salida-animal.entity";
 
 @Module({
   imports: [
@@ -56,6 +69,14 @@ import {
           Proveedor,
           LugarOrigen,
           Motivo,
+          Ingrediente,
+          Dieta,
+          DietaVersion,
+          DietaVersionIngrediente,
+          Alimentacion,
+          AlimentacionLote,
+          Salida,
+          SalidaAnimal,
         ],
         synchronize: false, // Migraciones manuales
         logging: true,
@@ -70,6 +91,9 @@ import {
     LotesModule,
     CorralesModule,
     CatalogosModule,
+    DietasModule,
+    AlimentacionModule,
+    SalidasModule,
   ],
 })
 export class AppModule {}

@@ -27,6 +27,7 @@ import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
+import { CreateSalidaDto } from "./dto/create-salida.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -200,6 +201,24 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.getMovimientos(id, animalId, req.user);
+  }
+
+  @Post(":id/salidas")
+  @Permissions("escritura:salida")
+  @ApiOperation({
+    summary: "Dar salida a animales del lote (total o parcial)",
+    description:
+      "El grupo (lote/partida/animales) debe tener pesaje final; si falta, se " +
+      "exige el peso en cada item y se crea el pesaje 'final'. Pasa los animales " +
+      "a estado 'salido' y registra el evento + snapshot por animal.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  darSalida(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CreateSalidaDto,
+    @Request() req,
+  ) {
+    return this.lotesService.darSalida(id, dto, req.user);
   }
 
   @Post(":id/pesajes/inicial")

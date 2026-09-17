@@ -36,9 +36,12 @@ Roles en Firestore (`roles/{id}`). idRol: `1=sys-admin`, `2=anfitrion`, `3=opera
 | Rol | Permisos |
 |---|---|
 | `sys-admin` | todos |
-| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral` |
-| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral` |
+| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento` |
+| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
+
+`lectura:dieta` ve sólo dietas activas + calculadora; `escritura:dieta` ve todas las
+versiones, crea/versiona y activa/desactiva dietas enteras.
 
 Flujo de registro: un usuario se registra **sin rol** (`idRol: null`) y queda pendiente.
 `sys-admin` le asigna el rol (**anfitrión**, **cliente** u **operario**) desde la sección
@@ -98,8 +101,44 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   ordenando por fecha/id dentro del lote (no se guarda). `animal.id_partida` FK. Cada partida
   tiene su **pesaje inicial**; los **intermedios y finales son del lote** (todas las partidas
   se pesan juntas). Si un lote tiene una sola partida, la UI no muestra la división.
+- **Dietas (módulo de alimentación)** — `dieta` (lógica, por `id_empresa`+`nombre`;
+  `id_empresa` **NULL = dieta GLOBAL** visible/usable por todas las empresas, como los catálogos
+  globales) con `activa` ON/OFF de la dieta ENTERA (manual, `escritura:dieta`) → `dieta_version`
+  (composición; `version` int, `activa` = vigente; al crear una nueva se desactivan las anteriores
+  → histórico, base del futuro registro de alimentación de corrales) → `dieta_version_ingrediente`
+  (`id_ingrediente` FK + `porcentaje` NUMERIC, la suma de % de una versión es 100, validado en la
+  app). Una dieta NO se edita: se versiona (`POST /dietas` crea versión si ya existe el nombre en
+  el mismo alcance). `ingrediente` es un catálogo multitenant más. El **sys-admin crea/versiona
+  para Global o para una empresa** (`idEmpresa` null/número); el resto (`escritura:dieta`) sólo
+para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:dieta` ve
+   globales + activas de su empresa; la calculadora de raciones es sólo de la UI.
+- **Alimentación de corrales** — `alimentacion` (evento: corral + dieta + versión + fecha +
+  cantidad total + tasa por animal + totales) → `alimentacion_lote` (reparto por lote con
+  snapshot `id_cliente` del titular para filtrar el histórico). Se alimentan **corrales
+  comunes** (las enfermerías se alimentan a través del corral de su lote). La cantidad
+  ingresada es la del CORRAL: `cantidad_por_animal = cantidad / animales VIVOS presentes del
+  corral` (`estado IN ('sano','enfermo')` y `id_corral_enfermeria NULL`); cada lote recibe
+  `tasa × nAnimales`. Los animales del lote que están en **enfermería** reciben una ESTIMACIÓN
+  **extra** a la misma tasa (porque allí se alimenta junto a animales de otros corrales/lotes):
+  se SUMAN al total, no se reparten del corral. Queda desglosado: `cantidad_corral_kg`
+  (ingresada) + `cantidad_enfermeria_kg` = `cantidad_kg`; `n_animales` + `n_animales_enfermeria`;
+  y por lote en `alimentacion_lote` (`n_animales`, `cantidad_kg`, `n_animales_enfermeria`,
+  `cantidad_enfermeria_kg`). Permisos `lectura:alimento` / `escritura:alimento`. Base del
+  reporte de costo.
+- **Salidas de animales** — `salida` (evento: lote + fecha + tipo 'lote'|'partida'|'animales' +
+  n + totales) → `salida_animal` (snapshot por animal: `peso_inicial`, `peso_final`,
+  `diferencia_kg`). Salen animales **vivos** (`estado IN ('sano','enfermo')`; muertos y salidos
+  no). El grupo debe tener **pesaje final** (se crea con la fecha de la salida si falta) y, al
+  salir, el animal pasa a estado **'salido'** (deja de considerarse: no cuenta como vivo para
+  alimentación, pesajes, promedios ni el mapa de corrales). `diferencia_kg` del grupo = Σ
+  (peso final − peso inicial, BRUTOS). Si al salir el lote queda sin vivos, se **liberan los
+  muertos del corral**: `lote.id_corral = NULL` y se limpian las enfermerías de sus animales.
+  El pesaje FINAL del lote lista los ya salidos al final con su peso registrado (sólo lectura);
+  los objetivos de pesaje (inicial/intermedio/final) excluyen muertos y salidos. Permisos
+  `lectura:salida` / `escritura:salida`. Histórico en `GET /salidas` (filtros por lote/partida/
+  cliente/fechas).
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
-  `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
+  `motivo`, `ingrediente`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
   `(COALESCE(id_empresa,0), LOWER(nombre))`. Seed global (migración 004): razas Braford,
   Brangus, Hereford, Aberdeen-Angus, Cruza europea; categorías Ternero/a, Novillo/Vaquillona,
@@ -125,11 +164,11 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 
 ```jsonc
 // roles/1
-{ "nombre": "sys-admin", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w"] }
+{ "nombre": "sys-admin", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
 // roles/2
-{ "nombre": "anfitrion", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w"] }
+{ "nombre": "anfitrion", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
 // roles/3
-{ "nombre": "operario", "permisos": ["p_lote_r", "p_lote_w", "p_corral_r"] }
+{ "nombre": "operario", "permisos": ["p_lote_r", "p_lote_w", "p_corral_r", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
 // roles/4
 { "nombre": "cliente", "permisos": ["p_lote_r"] }
 
@@ -141,6 +180,10 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 // permisos/p_lote_w     { "nombre": "escritura:lote" }
 // permisos/p_corral_r   { "nombre": "lectura:corral" }
 // permisos/p_corral_w   { "nombre": "escritura:corral" }
+// permisos/p_dieta_r    { "nombre": "lectura:dieta" }
+// permisos/p_dieta_w    { "nombre": "escritura:dieta" }
+// permisos/p_alimento_r { "nombre": "lectura:alimento" }
+// permisos/p_alimento_w { "nombre": "escritura:alimento" }
 
 // usuarios/{uid}  — el bootstrap del BE (POST /usuarios/bootstrap, Admin SDK) lo crea con
 //                  { idRol: null, nombre } (sin rol, pendiente); el FE nunca escribe directo
@@ -192,5 +235,12 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
    animales: con `nuevaPartida` crea una hoy (sin pesar); con `idPartida` une a una existente y,
    si esa partida ya tiene inicial, EXIGE el peso de los nuevos (a esa fecha) para no distorsionar
    la gráfica; sin elección reutiliza la partida sin pesar o crea una. Con una sola partida la UI
-   oculta la división. El backfill (migración 008) agrupa por `COALESCE(fecha_pesaje_ini,
-   created_at)`. `GET /lotes/:id` incluye `partidas[]` (nombre derivado, nAnimales, tieneInicial).
+    oculta la división. El backfill (migración 008) agrupa por `COALESCE(fecha_pesaje_ini,
+    created_at)`. `GET /lotes/:id` incluye `partidas[]` (nombre derivado, nAnimales, tieneInicial).
+10. **Dietas (alimentación)**: dieta lógica (`id_empresa`+`nombre`) con `activa` ON/OFF de la
+    dieta entera (manual, `escritura:dieta`) y versiones (`dieta_version`, la vigente `activa`,
+    las anteriores histórico). No se edita: `POST /dietas` crea dieta o nueva versión (misma
+    empresa+nombre → nueva `version`, desactiva las previas). `dieta_version_ingrediente` guarda
+    `porcentaje` y la app/server exige suma = 100. `ingrediente` es un catálogo más. `lectura:dieta`
+    ve sólo activas + calculadora; `escritura:dieta` ve todas las versiones y gestiona. Base para
+    el futuro histórico de alimentación de corrales.
