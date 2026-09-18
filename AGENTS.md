@@ -115,13 +115,17 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 - **pesajes** (parte de `lotes`; fuente de verdad de los pesos, por animal):
   `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial` (acepta
   `idPartida`: el inicial es POR PARTIDA), `POST :id/pesajes/intermedios` (del LOTE) y
-  `POST :id/pesajes/final` (del LOTE, un `final` por animal; admite desbaste → neto)
+  `POST :id/pesajes/final` (del LOTE, **varios finales por fecha** por salidas/cierres
+  parciales: en modo 'total' pesa los vivos SIN final —los restantes—; en modo 'animal' acepta
+  el subconjunto indicado, incluidos salidos con final para corregir)
   ({ fecha, modo: total|animal, pesoTotal?, desbasteTotal?,
   animales?[{animalId,peso,desbaste?}] }; 'total' reparte `pesoTotal / cantidad objetivo`;
-  'animal' exige el peso de TODOS los animales del objetivo).
+  'animal' exige el peso de TODOS los animales del objetivo, EXCEPTO en el final que puede ser
+  parcial).
   `PATCH :id/pesajes/:pesajeId` (edita peso/desbaste/fecha de un pesaje),
   `DELETE :id/pesajes/intermedios/:fecha` (borra una columna intermedia del lote),
-  `DELETE :id/pesajes/final` (borra el pesaje final) y `DELETE :id/pesajes/:pesajeId`. Tras
+  `DELETE :id/pesajes/final` (borra todos los finales) y `DELETE :id/pesajes/final/:fecha`
+  (borra el grupo final de esa fecha). Tras
   cada cambio, `proyectarAnimal(es)` recalcula las columnas de peso de `animal`
   (inicial/final/netos y **diferencia = peso final − peso inicial, BRUTOS**); el **aum. diario
   no se persiste**: lo calcula `calcularAumDiario` en `GET /lotes/:id` usando el pesaje `final`
@@ -187,9 +191,10 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   si falta; el item exige `pesoFinal`). Crea `salida` + `salida_animal` (snapshot de pesos y
   diferencia), pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral
   (limpia `lote.id_corral` y las enfermerías de sus animales — "se quitan los muertos del
-  corral"). `GET /salidas` (`lectura:salida`) lista el histórico con filtros
+  corral").   `GET /salidas` (`lectura:salida`) lista el histórico con filtros
   `idLote`/`idPartida`/`idCliente`/`fechaDesde`/`fechaHasta` y desglose por animal
-  (inicial → final + diferencia). Ver el modelo en DESIGN.
+  (inicial → final + diferencia). `PATCH /salidas/:id` (`escritura:salida`) edita la `fecha`
+  de la salida (por ahora sólo eso; no re-toca los pesajes finales). Ver el modelo en DESIGN.
 
 ## Convenciones
 

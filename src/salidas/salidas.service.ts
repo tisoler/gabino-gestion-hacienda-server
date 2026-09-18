@@ -1,10 +1,16 @@
-import { Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Salida } from "../entities/salida.entity";
 import { Lote } from "../entities/lote.entity";
 import { Roles } from "src/constantes";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
+import { ActualizarSalidaFechaDto } from "./dto/actualizar-salida-fecha.dto";
 
 export interface SalidaItemView {
   animalId: number;
@@ -152,6 +158,41 @@ export class SalidasService {
     });
   }
 
+  /** Cambia la fecha de una salida (accesible según la empresa / cliente). */
+  async editarFecha(
+    id: number,
+    dto: ActualizarSalidaFechaDto,
+    user: any,
+  ): Promise<{ id: number; fecha: string }> {
+    const salida = await this.salidaRepository.findOne({
+      where: { id },
+      relations: ["lote"],
+    });
+    if (!salida) throw new NotFoundException("Salida no encontrada");
+
+    const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
+    if (!isAdmin) {
+      const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
+        Number(e),
+      );
+      if (!userEmpresas.includes(salida.idEmpresa)) {
+        throw new ForbiddenException("No tiene permisos sobre esta salida");
+      }
+      if (
+        user.roles?.includes(Roles.CLIENTE) &&
+        salida.lote?.idCliente !== user.id
+      ) {
+        throw new NotFoundException("Salida no encontrada");
+      }
+    }
+
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    salida.fecha = fecha;
+    await this.salidaRepository.save(salida);
+    return { id: salida.id, fecha: dto.fecha };
+  }
+
   /** "Partida N" por orden de fecha/id dentro de cada lote (un query). */
   private async buildNombrePartida(
     loteIds: number[],
@@ -180,5 +221,11 @@ export class SalidasService {
     if (typeof d === "string") return d.slice(0, 10);
     const iso = d.toISOString();
     return iso.slice(0, 10);
+  }
+
+  private aDate(iso?: string): Date | null {
+    if (!iso) return null;
+    const d = new Date(`${iso}T00:00:00`);
+    return isNaN(d.getTime()) ? null : d;
   }
 }

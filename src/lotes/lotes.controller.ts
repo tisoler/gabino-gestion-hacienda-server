@@ -325,6 +325,19 @@ export class LotesController {
     return this.lotesService.eliminarPesoFinal(id, req.user);
   }
 
+  @Delete(":id/pesajes/final/:fecha")
+  @Permissions("escritura:lote")
+  @ApiOperation({ summary: "Eliminar un grupo de pesajes finales (por fecha)" })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  @ApiParam({ name: "fecha", description: "YYYY-MM-DD" })
+  eliminarPesoFinalFecha(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("fecha") fecha: string,
+    @Request() req,
+  ) {
+    return this.lotesService.eliminarPesoFinal(id, req.user, fecha);
+  }
+
   @Delete(":id/pesajes/:pesajeId")
   @Permissions("escritura:lote")
   @ApiOperation({ summary: "Eliminar un pesaje puntual" })

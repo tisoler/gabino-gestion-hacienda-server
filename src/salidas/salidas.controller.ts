@@ -1,6 +1,22 @@
-import { Controller, Get, Query, Request, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Query,
+  Request,
+  UseGuards,
+} from "@nestjs/common";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from "@nestjs/swagger";
 import { SalidasService, SalidaView } from "./salidas.service";
+import { ActualizarSalidaFechaDto } from "./dto/actualizar-salida-fecha.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -35,5 +51,17 @@ export class SalidasController {
       fechaDesde,
       fechaHasta,
     });
+  }
+
+  @Patch(":id")
+  @Permissions("escritura:salida")
+  @ApiOperation({ summary: "Editar la fecha de una salida" })
+  @ApiParam({ name: "id", type: Number, description: "ID de la salida" })
+  editarFecha(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ActualizarSalidaFechaDto,
+    @Request() req,
+  ): Promise<{ id: number; fecha: string }> {
+    return this.salidasService.editarFecha(id, dto, req.user);
   }
 }

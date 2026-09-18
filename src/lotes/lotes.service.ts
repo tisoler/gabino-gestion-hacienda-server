@@ -1118,35 +1118,85 @@ export class LotesService {
     const fecha = this.aDate(dto.fecha);
     if (!fecha) throw new BadRequestException("Fecha de pesaje inválida");
 
-    // Objetivo: el INICIAL es por partida (si se indica idPartida); los
-    // INTERMEDIOS/FINALES son de todo el lote (las partidas se pesan juntas).
-    // Sólo animales NO muertos y NO salidos: muertos y egresados no se pesan
-    // (regla de salidas; los egresados conservan su peso registrado en la salida).
-    const dondeAnimales: any = {
-      idLote: lote.id,
-      estado: In(["sano", "enfermo"]),
-    };
-    if (tipo === "inicial" && dto.idPartida) {
-      const partida = await this.partidaRepository.findOne({
-        where: { id: dto.idPartida, idLote: lote.id },
+    // Objetivo:
+    //  - INICIAL: por partida (si se indica idPartida) o todo el lote.
+    //  - INTERMEDIO: todo el lote.
+    //  - FINAL: animales que AÚN NO tienen final (salidas parciales → puede
+    //    haber varios finales por fecha). En modo 'animal' son los indicados;
+    //    en modo 'total', los restantes vivos sin final.
+    // Sólo animales NO muertos y NO salidos.
+    let animales: Animal[];
+    if (tipo === "final") {
+      // Candidatos: vivos sin final (para crear) o con final existente (para
+      // editar un grupo/fecha, incluidos los ya salidos). En modo 'total' sólo
+      // los restantes vivos sin final.
+      const todos = await this.animalRepository.find({
+        where: { idLote: lote.id },
+        order: { nAnimal: "ASC", id: "ASC" },
       });
-      if (!partida) {
+      const finalesExistentes = await this.pesajeRepository.find({
+        where: {
+          idAnimal: In(todos.map((a) => a.id)),
+          tipo: "final",
+        },
+      });
+      const conFinal = new Set(finalesExistentes.map((p) => p.idAnimal));
+      const candidatos = todos.filter(
+        (a) =>
+          a.estado === "sano" || a.estado === "enfermo" || conFinal.has(a.id),
+      );
+      const candidatosById = new Map(candidatos.map((a) => [a.id, a]));
+      if (dto.modo === "total") {
+        animales = candidatos.filter((a) => !conFinal.has(a.id));
+      } else {
+        if (!dto.animales?.length) {
+          throw new BadRequestException("Ingresá el peso de cada animal");
+        }
+        animales = [];
+        for (const r of dto.animales) {
+          const a = candidatosById.get(r.animalId);
+          if (!a) {
+            throw new BadRequestException(
+              "Un animal indicado no pertenece al lote o no tiene pesaje final",
+            );
+          }
+          animales.push(a);
+        }
+      }
+      if (animales.length === 0) {
         throw new BadRequestException(
-          "La partida indicada no pertenece a este lote",
+          dto.modo === "total"
+            ? "No hay animales pendientes de pesaje final"
+            : "Indicá al menos un animal",
         );
       }
-      dondeAnimales.idPartida = dto.idPartida;
-    }
-    const animales = await this.animalRepository.find({
-      where: dondeAnimales,
-      order: { nAnimal: "ASC", id: "ASC" },
-    });
-    if (animales.length === 0) {
-      throw new BadRequestException(
-        tipo === "inicial" && dto.idPartida
-          ? "La partida no tiene animales"
-          : "El lote no tiene animales; agregá animales antes de cargar pesos",
-      );
+    } else {
+      const dondeAnimales: any = {
+        idLote: lote.id,
+        estado: In(["sano", "enfermo"]),
+      };
+      if (tipo === "inicial" && dto.idPartida) {
+        const partida = await this.partidaRepository.findOne({
+          where: { id: dto.idPartida, idLote: lote.id },
+        });
+        if (!partida) {
+          throw new BadRequestException(
+            "La partida indicada no pertenece a este lote",
+          );
+        }
+        dondeAnimales.idPartida = dto.idPartida;
+      }
+      animales = await this.animalRepository.find({
+        where: dondeAnimales,
+        order: { nAnimal: "ASC", id: "ASC" },
+      });
+      if (animales.length === 0) {
+        throw new BadRequestException(
+          tipo === "inicial" && dto.idPartida
+            ? "La partida no tiene animales"
+            : "El lote no tiene animales; agregá animales antes de cargar pesos",
+        );
+      }
     }
 
     const redondear = (n: number) => Math.round(n * 100) / 100;
@@ -1180,8 +1230,9 @@ export class LotesService {
           desbaste: Number(r.desbaste ?? 0),
         });
       }
-      // Por animal exige el peso de TODOS los animales del objetivo.
-      if (map.size !== idsObjetivo.size) {
+      // Por animal exige el peso de TODOS los animales del objetivo (excepto el
+      // FINAL, que puede ser parcial: cada salida/cierre pesa su subconjunto).
+      if (tipo !== "final" && map.size !== idsObjetivo.size) {
         throw new BadRequestException(
           "Ingresá el peso de todos los animales de la partida/lote",
         );
@@ -1612,10 +1663,11 @@ export class LotesService {
     return { eliminados: aEliminar.length };
   }
 
-  /** Elimina el PESAJE FINAL del lote (todos los pesajes 'final'). */
+  /** Elimina los pesajes 'final'. Con `fecha`, sólo los de esa fecha (grupo). */
   async eliminarPesoFinal(
     idLote: number,
     user: any,
+    fecha?: string,
   ): Promise<{ eliminados: number }> {
     const lote = await this.getLoteVerificado(idLote, user);
     const animales = await this.animalRepository.find({
@@ -1624,9 +1676,13 @@ export class LotesService {
     });
     const ids = animales.map((a) => a.id);
     if (ids.length === 0) return { eliminados: 0 };
-    const finales = await this.pesajeRepository.find({
-      where: { idAnimal: In(ids), tipo: "final" },
-    });
+    const where: any = { idAnimal: In(ids), tipo: "final" };
+    if (fecha) {
+      const f = this.aDate(fecha);
+      if (!f) throw new BadRequestException("Fecha inválida");
+      where.fecha = f;
+    }
+    const finales = await this.pesajeRepository.find({ where });
     if (finales.length === 0) return { eliminados: 0 };
     await this.pesajeRepository.delete(finales.map((p) => p.id));
     await this.proyectarAnimales(
