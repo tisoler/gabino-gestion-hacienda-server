@@ -102,7 +102,7 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `PATCH /lotes/:id` · `POST /lotes/:id/animales` (`caravana` + `idPelaje` requeridos;
   `idRaza`/`idCategoria` opcionales; `nAnimal` auto = último del lote + 1) ·
   `POST /lotes/:id/animales/masiva` (carga masiva: raza/pelaje/categoría **opcionales**,
-  cantidad + caravanas, peso inicial por `modoInicial` total/animal, en una transacción) ·
+  cantidad + caravanas; la partida la decide el server y el peso inicial se carga en Pesajes) ·
   `POST /lotes/:id/animales/edicion-masiva` (raza/categoría/pelaje por animal del lote o de
   una partida: `{ alcance, idPartida?, valores: [{animalId, idRaza?, idCategoria?, idPelaje?}] }`
   con campo ausente = no cambia, `null` = limpia, número = setea; catálogos validados) ·
@@ -113,15 +113,15 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
   de la empresa. Un **cliente** sólo ve sus propias partidas (`id_cliente = uid`).
 - **pesajes** (parte de `lotes`; fuente de verdad de los pesos, por animal):
-  `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial` (acepta
-  `idPartida`: el inicial es POR PARTIDA), `POST :id/pesajes/intermedios` (del LOTE) y
-  `POST :id/pesajes/final` (del LOTE, **varios finales por fecha** por salidas/cierres
-  parciales: en modo 'total' pesa los vivos SIN final —los restantes—; en modo 'animal' acepta
-  el subconjunto indicado, incluidos salidos con final para corregir)
+  `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial` (con
+  `idPartida` = por partida), `POST :id/pesajes/intermedios` y `POST :id/pesajes/final`
+  (**varios finales por fecha** por salidas/cierres parciales) comparten la lógica:
+  **candidatos = vivos del alcance (lote o `idPartida`) + los que YA tienen un pesaje de ese
+  tipo en el contexto** (incluidos SALIDOS, para corregir peso/fecha). En modo `animal` se
+  acepta un **subconjunto** (el FE decide el alcance); en `total` reparte entre los vivos sin
+  pesaje en el contexto
   ({ fecha, modo: total|animal, pesoTotal?, desbasteTotal?,
-  animales?[{animalId,peso,desbaste?}] }; 'total' reparte `pesoTotal / cantidad objetivo`;
-  'animal' exige el peso de TODOS los animales del objetivo, EXCEPTO en el final que puede ser
-  parcial).
+  animales?[{animalId,peso,desbaste?}] }).
   `PATCH :id/pesajes/:pesajeId` (edita peso/desbaste/fecha de un pesaje),
   `DELETE :id/pesajes/intermedios/:fecha` (borra una columna intermedia del lote),
   `DELETE :id/pesajes/final` (borra todos los finales) y `DELETE :id/pesajes/final/:fecha`
@@ -129,14 +129,15 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   cada cambio, `proyectarAnimal(es)` recalcula las columnas de peso de `animal`
   (inicial/final/netos y **diferencia = peso final − peso inicial, BRUTOS**); el **aum. diario
   no se persiste**: lo calcula `calcularAumDiario` en `GET /lotes/:id` usando el pesaje `final`
-  si existe, si no el último por fecha. Los objetivos de pesaje (inicial/intermedio/final)
-  EXCLUYEN muertos y salidos (`estado IN ('sano','enfermo')`); en el FINAL los animales ya
-  salidos se conservan con su peso registrado en la salida. Ver decisión 8 de DESIGN.
+  si existe, si no el último por fecha. Los objetivos de pesaje incluyen vivos
+  (`sano`/`enfermo`) **y** los que ya tienen un pesaje de ese tipo/contexto (aunque estén
+  `salido`), para poder corregirlos; los muertos nunca. Ver decisión 8 de DESIGN.
 - **partidas** (parte de `lotes`; tandas de ingreso): tabla `partida` (id_lote, fecha de carga)
   + `animal.id_partida`. El nombre ("Partida N") se deriva por orden de fecha/id. Al dar de alta
-  animales, `resolverPartidaAlta`: `nuevaPartida` (crea hoy, sin pesar) / `idPartida` (une; si la
-  partida ya tiene inicial, EXIGE los pesos nuevos a esa fecha) / ninguno (reutiliza la partida
-  sin pesar o crea una). `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
+  animales, `resolverPartidaAlta(idLote)` (la decisión es **sólo del server**, sin parámetros del
+  cliente): si hay una partida **ABIERTA** (algún vivo sin peso inicial) se une a ella; si no
+  (todas pesadas o ninguna) crea una nueva hoy. El peso inicial **nunca** se carga en el alta
+  (va en Pesajes). `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
   con `lotesOcupantes[]`, pueden compartirse; incluye `tieneVivos` = hay animales con estado
   sano/enfermo, para filtrar "alimentables" en el modal) ·

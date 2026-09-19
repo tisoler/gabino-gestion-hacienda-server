@@ -1,5 +1,4 @@
 import {
-  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -39,20 +38,6 @@ export class CreateAnimalDto {
   @IsInt()
   @Min(1)
   idCategoria?: number | null;
-
-  /**
-   * Partida del alta. `nuevaPartida: true` crea una partida hoy; `idPartida`
-   * une el animal a una existente; si no se indica ninguna, el server reutiliza
-   * la partida sin pesar del lote o crea una nueva.
-   */
-  @IsOptional()
-  @IsBoolean()
-  nuevaPartida?: boolean;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  idPartida?: number;
 
   /**
    * Peso inicial POR ANIMAL. Requerido sólo cuando se une a una partida que ya

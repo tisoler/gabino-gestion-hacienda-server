@@ -73,7 +73,7 @@ export class LotesService {
     private salidaAnimalRepository: Repository<SalidaAnimal>,
     private cache: FirestoreCacheService,
     private catalogos: CatalogosService,
-  ) {}
+  ) { }
 
   /**
    * Lista lotes visibles para el usuario.
@@ -131,9 +131,9 @@ export class LotesService {
     const animalIds = animales.map((a) => a.id);
     const pesajes = animalIds.length
       ? await this.pesajeRepository.find({
-          where: { idAnimal: In(animalIds) },
-          order: { fecha: "ASC", id: "ASC" },
-        })
+        where: { idAnimal: In(animalIds) },
+        order: { fecha: "ASC", id: "ASC" },
+      })
       : [];
     // Partidas del lote (con nombre derivado "Partida N", nAnimales y si ya
     // tienen pesaje inicial). Con una sola partida la UI oculta la división.
@@ -390,11 +390,8 @@ export class LotesService {
     }
     const nAnimal =
       dto.nAnimal ?? (await this.siguienteNAnimal(lote.id, undefined));
-    // Partida: nueva (hoy), existente (idPartida) o reutilizar la sin pesar.
-    const { partida, inicialFecha } = await this.resolverPartidaAlta(lote.id, {
-      nuevaPartida: dto.nuevaPartida,
-      idPartida: dto.idPartida,
-    });
+    // Partida: se une a la abierta (vivos sin pesar) o crea una nueva.
+    const partida = await this.resolverPartidaAlta(lote.id);
     const base = {
       idLote: lote.id,
       nAnimal,
@@ -410,23 +407,6 @@ export class LotesService {
     const saved = await this.animalRepository.save(
       this.animalRepository.create(base),
     );
-    // Si se unió a una partida que ya tiene pesaje inicial, exigir el peso del
-    // nuevo animal (a la fecha de esa partida) para no distorsionar la gráfica.
-    if (inicialFecha) {
-      if (dto.pesoInicial == null) {
-        throw new BadRequestException(
-          "Indicá el peso inicial: la partida elegida ya tiene pesaje inicial",
-        );
-      }
-      await this.setPesajeTipo(
-        saved.id,
-        "inicial",
-        this.fechaIso(inicialFecha),
-        Number(dto.pesoInicial),
-        dto.desbasteIni,
-      );
-      await this.proyectarAnimal(saved.id);
-    }
     if (estado !== "sano") {
       await this.registrarMovimiento({
         idAnimal: saved.id,
@@ -453,10 +433,6 @@ export class LotesService {
 
   /** Busca o crea la partida de un lote para una fecha de carga. */
   private async crearPartida(idLote: number, fecha: Date): Promise<Partida> {
-    const existente = await this.partidaRepository.findOne({
-      where: { idLote, fecha },
-    });
-    if (existente) return existente;
     return this.partidaRepository.save(
       this.partidaRepository.create({ idLote, fecha }),
     );
@@ -477,51 +453,51 @@ export class LotesService {
   }
 
   /**
-   * Resuelve la partida para un alta de animales:
-   *  - `nuevaPartida` → crea una partida hoy (los animales quedan sin pesar).
-   *  - `idPartida` → une a esa partida; si tiene pesaje inicial, se exige el
-   *    peso de los nuevos (devuelve `inicialFecha`).
-   *  - sin elección → reutiliza una partida sin pesar del lote; si todas están
-   *    pesadas, une a la primera (exige pesos); si el lote está vacío, crea una.
+   * Resuelve la partida para un alta de animales (decisión sólo del server):
+   * si hay una partida ABIERTA (algún vivo sin peso inicial) se une a ella;
+   * si no (todas pesadas o ninguna), crea una nueva hoy. El peso inicial se
+   * carga aparte, en Pesajes.
    */
-  private async resolverPartidaAlta(
-    idLote: number,
-    opts: { nuevaPartida?: boolean; idPartida?: number },
-  ): Promise<{ partida: Partida; inicialFecha: Date | null }> {
-    if (opts.nuevaPartida) {
-      const partida = await this.crearPartida(idLote, this.hoyDate());
-      return { partida, inicialFecha: null };
-    }
-    if (opts.idPartida) {
-      const partida = await this.partidaRepository.findOne({
-        where: { id: opts.idPartida, idLote },
-      });
-      if (!partida) {
-        throw new BadRequestException(
-          "La partida indicada no pertenece a este lote",
-        );
-      }
-      const inicialFecha = await this.fechaInicialPartida(partida.id);
-      return { partida, inicialFecha };
-    }
+  private async resolverPartidaAlta(idLote: number): Promise<Partida> {
     const partidas = await this.partidaRepository.find({
       where: { idLote },
       order: { fecha: "ASC", id: "ASC" },
     });
     for (const p of partidas) {
-      const f = await this.fechaInicialPartida(p.id);
-      if (!f) return { partida: p, inicialFecha: null };
+      if ((await this.contarAnimalesSinInicial(p.id)) > 0) {
+        console.log(123, p)
+        return p
+      };
     }
-    if (partidas.length === 0) {
-      const partida = await this.crearPartida(idLote, this.hoyDate());
-      return { partida, inicialFecha: null };
-    }
-    // Todas pesadas: unir a la primera y exigir los pesos nuevos.
-    const primera = partidas[0];
-    return {
-      partida: primera,
-      inicialFecha: await this.fechaInicialPartida(primera.id),
-    };
+    console.log(124);
+    return this.crearPartida(idLote, this.hoyDate());
+  }
+
+  /**
+   * Cantidad de animales VIVOS (sano/enfermo) de una partida que AÚN no tienen
+   * peso inicial: ni la columna proyectada `peso_inicial` ni un pesaje 'inicial'.
+   * Los muertos/salidos sin pesar no cuentan (no dejan la partida "abierta").
+   */
+  private async contarAnimalesSinInicial(idPartida: number): Promise<number> {
+    const animales = await this.animalRepository.find({
+      where: { idPartida, estado: In(["sano", "enfermo"]) },
+      select: ["id", "pesoInicial"],
+    });
+    if (animales.length === 0) return 0;
+    const conInicial = new Set(
+      (
+        await this.pesajeRepository.find({
+          where: { idAnimal: In(animales.map((a) => a.id)), tipo: "inicial" },
+          select: ["idAnimal"],
+        })
+      ).map((p) => p.idAnimal),
+    );
+    console.log(111, animales.filter(
+      (a) => a.pesoInicial == null && !conInicial.has(a.id),
+    ).length)
+    return animales.filter(
+      (a) => a.pesoInicial == null && !conInicial.has(a.id),
+    ).length;
   }
 
   /** Elimina partidas que quedaron sin animales (tras borrar un animal). */
@@ -709,23 +685,10 @@ export class LotesService {
       await this.validarCaravanaLibre(lote.id, c, undefined);
     }
 
-    // Partida de la tanda + fecha inicial obligatoria si une a una partida ya
-    // pesada (en ese caso se exige el peso de cada animal nuevo).
-    const { partida, inicialFecha } = await this.resolverPartidaAlta(lote.id, {
-      nuevaPartida: dto.nuevaPartida,
-      idPartida: dto.idPartida,
-    });
-    if (inicialFecha) {
-      const faltan = dto.animales.filter((i) => i.peso == null).length;
-      if (faltan > 0) {
-        throw new BadRequestException(
-          "La partida elegida ya tiene pesaje inicial: indicá el peso de todos los animales nuevos",
-        );
-      }
-    }
-    const redondear = (n: number) => Math.round(n * 100) / 100;
+    // Partida de la tanda: se une a la abierta (vivos sin pesar) o crea una nueva.
+    const partida = await this.resolverPartidaAlta(lote.id);
 
-    // BULK: 1 save de animales + 1 save de pesajes dentro de UNA transacción.
+    // BULK: 1 save de animales. El peso inicial NO se carga acá: va en Pesajes.
     const ids = await this.animalRepository.manager.transaction(async (em) => {
       const repo = em.getRepository(Animal);
       let next = await this.siguienteNAnimal(lote.id, undefined, em);
@@ -744,27 +707,8 @@ export class LotesService {
         }),
       );
       const saved = await repo.save(nuevos);
-      if (inicialFecha) {
-        const pesajeRepo = em.getRepository(Pesaje);
-        const pesajes = saved.map((a, i) => {
-          const peso = Number(dto.animales[i].peso);
-          const desbaste = Number(dto.animales[i].desbaste ?? 0);
-          return pesajeRepo.create({
-            idAnimal: a.id,
-            tipo: "inicial",
-            fecha: inicialFecha,
-            peso,
-            desbaste,
-            pesoNeto: redondear(peso - desbaste),
-          });
-        });
-        if (pesajes.length > 0) await pesajeRepo.save(pesajes);
-      }
       return saved.map((a) => a.id);
     });
-
-    // Proyección sólo si se cargaron pesajes iniciales.
-    if (inicialFecha) await this.proyectarAnimales(ids);
 
     const animales = await this.animalRepository.find({
       where: { id: In(ids) },
@@ -1118,84 +1062,66 @@ export class LotesService {
     const fecha = this.aDate(dto.fecha);
     if (!fecha) throw new BadRequestException("Fecha de pesaje inválida");
 
-    // Objetivo:
-    //  - INICIAL: por partida (si se indica idPartida) o todo el lote.
-    //  - INTERMEDIO: todo el lote.
-    //  - FINAL: animales que AÚN NO tienen final (salidas parciales → puede
-    //    haber varios finales por fecha). En modo 'animal' son los indicados;
-    //    en modo 'total', los restantes vivos sin final.
-    // Sólo animales NO muertos y NO salidos.
-    let animales: Animal[];
-    if (tipo === "final") {
-      // Candidatos: vivos sin final (para crear) o con final existente (para
-      // editar un grupo/fecha, incluidos los ya salidos). En modo 'total' sólo
-      // los restantes vivos sin final.
-      const todos = await this.animalRepository.find({
-        where: { idLote: lote.id },
-        order: { nAnimal: "ASC", id: "ASC" },
+    // Objetivo (candidatos): vivos del alcance + los que YA tienen un pesaje de
+    // este tipo en el contexto (incluidos los SALIDOS, para corregir peso/fecha).
+    //  - INICIAL: por partida (si viene idPartida) o todo el lote; contexto = 'inicial'.
+    //  - INTERMEDIO: lote o partida; contexto = 'intermedio' de ESTA fecha.
+    //  - FINAL: lote; contexto = 'final'.
+    const alcance: any = { idLote: lote.id };
+    if (dto.idPartida) {
+      const partida = await this.partidaRepository.findOne({
+        where: { id: dto.idPartida, idLote: lote.id },
       });
-      const finalesExistentes = await this.pesajeRepository.find({
-        where: {
-          idAnimal: In(todos.map((a) => a.id)),
-          tipo: "final",
-        },
-      });
-      const conFinal = new Set(finalesExistentes.map((p) => p.idAnimal));
-      const candidatos = todos.filter(
-        (a) =>
-          a.estado === "sano" || a.estado === "enfermo" || conFinal.has(a.id),
-      );
-      const candidatosById = new Map(candidatos.map((a) => [a.id, a]));
-      if (dto.modo === "total") {
-        animales = candidatos.filter((a) => !conFinal.has(a.id));
-      } else {
-        if (!dto.animales?.length) {
-          throw new BadRequestException("Ingresá el peso de cada animal");
-        }
-        animales = [];
-        for (const r of dto.animales) {
-          const a = candidatosById.get(r.animalId);
-          if (!a) {
-            throw new BadRequestException(
-              "Un animal indicado no pertenece al lote o no tiene pesaje final",
-            );
-          }
-          animales.push(a);
-        }
-      }
-      if (animales.length === 0) {
+      if (!partida) {
         throw new BadRequestException(
-          dto.modo === "total"
-            ? "No hay animales pendientes de pesaje final"
-            : "Indicá al menos un animal",
+          "La partida indicada no pertenece a este lote",
         );
+      }
+      alcance.idPartida = dto.idPartida;
+    }
+    const todos = await this.animalRepository.find({
+      where: alcance,
+      order: { nAnimal: "ASC", id: "ASC" },
+    });
+    const esVivo = (a: Animal) => a.estado === "sano" || a.estado === "enfermo";
+    const conPesaje = new Set<number>();
+    if (todos.length > 0) {
+      const dondePesaje: any = {
+        idAnimal: In(todos.map((a) => a.id)),
+        tipo,
+      };
+      if (tipo === "intermedio") dondePesaje.fecha = fecha;
+      const existentes = await this.pesajeRepository.find({
+        where: dondePesaje,
+      });
+      for (const p of existentes) conPesaje.add(p.idAnimal);
+    }
+    const candidatos = todos.filter((a) => esVivo(a) || conPesaje.has(a.id));
+    const candidatosById = new Map(candidatos.map((a) => [a.id, a]));
+
+    let animales: Animal[];
+    if (dto.modo === "total") {
+      // reparte entre los vivos que AÚN no tienen pesaje en el contexto
+      animales = candidatos.filter((a) => esVivo(a) && !conPesaje.has(a.id));
+      if (animales.length === 0) {
+        throw new BadRequestException("No hay animales para repartir el total");
       }
     } else {
-      const dondeAnimales: any = {
-        idLote: lote.id,
-        estado: In(["sano", "enfermo"]),
-      };
-      if (tipo === "inicial" && dto.idPartida) {
-        const partida = await this.partidaRepository.findOne({
-          where: { id: dto.idPartida, idLote: lote.id },
-        });
-        if (!partida) {
+      if (!dto.animales?.length) {
+        throw new BadRequestException("Ingresá el peso de cada animal");
+      }
+      animales = [];
+      for (const r of dto.animales) {
+        const a = candidatosById.get(r.animalId);
+        if (!a) {
           throw new BadRequestException(
-            "La partida indicada no pertenece a este lote",
+            "Un animal indicado no pertenece al lote/partida o no tiene pesaje para editar",
           );
         }
-        dondeAnimales.idPartida = dto.idPartida;
+        animales.push(a);
       }
-      animales = await this.animalRepository.find({
-        where: dondeAnimales,
-        order: { nAnimal: "ASC", id: "ASC" },
-      });
       if (animales.length === 0) {
-        throw new BadRequestException(
-          tipo === "inicial" && dto.idPartida
-            ? "La partida no tiene animales"
-            : "El lote no tiene animales; agregá animales antes de cargar pesos",
-        );
+        throw new BadRequestException("Indicá al menos un animal");
       }
     }
 
@@ -1229,13 +1155,6 @@ export class LotesService {
           peso: Number(r.peso),
           desbaste: Number(r.desbaste ?? 0),
         });
-      }
-      // Por animal exige el peso de TODOS los animales del objetivo (excepto el
-      // FINAL, que puede ser parcial: cada salida/cierre pesa su subconjunto).
-      if (tipo !== "final" && map.size !== idsObjetivo.size) {
-        throw new BadRequestException(
-          "Ingresá el peso de todos los animales de la partida/lote",
-        );
       }
       porAnimal = (a) => map.get(a.id) ?? null;
     }

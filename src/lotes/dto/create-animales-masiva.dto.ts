@@ -2,7 +2,6 @@ import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
-  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -62,17 +61,6 @@ export class CreateAnimalesMasivaDto {
   @Min(1)
   @Max(500)
   cantidad: number;
-
-  /** true = crea una partida nueva (hoy). Excluyente con idPartida. */
-  @IsOptional()
-  @IsBoolean()
-  nuevaPartida?: boolean;
-
-  /** Partida existente a la que unir la tanda. */
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  idPartida?: number;
 
   @IsOptional()
   @IsString()
