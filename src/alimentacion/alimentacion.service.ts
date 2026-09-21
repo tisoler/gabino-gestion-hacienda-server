@@ -1,22 +1,28 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { EntityManager, Repository } from "typeorm";
+import { EntityManager, In, Repository } from "typeorm";
 import { Alimentacion } from "../entities/alimentacion.entity";
 import { AlimentacionLote } from "../entities/alimentacion-lote.entity";
 import { Corral } from "../entities/corral.entity";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
 import { Dieta, DietaVersion } from "../entities/dieta.entity";
+import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
+import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
+import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { Roles } from "src/constantes";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import {
+  AjusteLoteDto,
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
 } from "./dto/create-alimentacion.dto";
+import { ActualizarAlimentacionFechaDto } from "./dto/actualizar-alimentacion-fecha.dto";
 
 /** Fila interna del reparto por lote (antes de armar la vista). */
 export interface RepartoRow {
@@ -43,6 +49,8 @@ export interface RepartoLote {
 export interface AlimentacionView {
   id: number;
   fecha: string;
+  /** Hora de la alimentación 'HH:MM:SS' (default 12:00). */
+  hora: string;
   /** Total (corral + enfermería). */
   cantidadKg: number;
   /** Lo ingresado para el corral. */
@@ -81,6 +89,12 @@ export class AlimentacionService {
     private dietaRepository: Repository<Dieta>,
     @InjectRepository(DietaVersion)
     private dietaVersionRepository: Repository<DietaVersion>,
+    @InjectRepository(LoteCorralAsignacion)
+    private asignacionRepository: Repository<LoteCorralAsignacion>,
+    @InjectRepository(AnimalMovimiento)
+    private movimientoRepository: Repository<AnimalMovimiento>,
+    @InjectRepository(SalidaAnimal)
+    private salidaAnimalRepository: Repository<SalidaAnimal>,
     private cache: FirestoreCacheService,
   ) {}
 
@@ -94,9 +108,10 @@ export class AlimentacionService {
   }
 
   /**
-   * Registra una alimentación de corral (una fila = un día): calcula la tasa
-   * por animal (cantidad / animales VIVOS de los lotes del corral, incluyendo
-   * los de enfermería del lote, excluyendo muertos) y guarda el reparto por lote.
+   * Registra una alimentación de corral (una fila = un instante fecha+hora).
+   * Reconstruye los animales del corral EN ESE INSTANTE (tasa = cantidad /
+   * vivos en el común; enfermería = vivos del lote en enfermería, estimación
+   * extra) y guarda el reparto por lote.
    */
   async crear(
     dto: CreateAlimentacionDto,
@@ -106,28 +121,22 @@ export class AlimentacionService {
     if (!empresaId) {
       throw new BadRequestException("No tenés una empresa actual asociada");
     }
-    const { corral, reparto } = await this.prepararCorral(
-      dto.idCorral,
-      empresaId,
-    );
+    const corral = await this.validarCorralAlimentar(dto.idCorral, empresaId);
     const { dieta, version } = await this.validarDieta(dto.idDieta, empresaId);
-    const fecha = this.aDate(dto.fecha);
-    if (!fecha) throw new BadRequestException("Fecha inválida");
-    const tasas = this.calcularTasas(Number(dto.cantidadKg), reparto);
 
     const idAlimentacion =
       await this.alimentacionRepository.manager.transaction(async (em) => {
         const alRepo = em.getRepository(Alimentacion);
         const alLoteRepo = em.getRepository(AlimentacionLote);
-        return this.crearUna(em, alRepo, alLoteRepo, {
+        return this.crearFila(em, alRepo, alLoteRepo, {
           empresaId,
           corral,
           dieta,
           version,
-          fecha,
-          cantidadCorralKg: Number(dto.cantidadKg),
-          reparto,
-          tasas,
+          fechaStr: dto.fecha,
+          horaStr: dto.hora,
+          cantidadKg: Number(dto.cantidadKg),
+          ajuste: dto.ajuste,
           idUsuario: user?.id ?? null,
         });
       });
@@ -137,8 +146,8 @@ export class AlimentacionService {
 
   /**
    * Carga VARIAS alimentaciones (filas) en un solo request: mismo corral, cada
-   * fila con su dieta, fecha y cantidad. El reparto se calcula UNA vez (mismo
-   * corral) y todo se guarda en una única transacción.
+   * fila con su dieta, fecha, hora y cantidad. El reparto se reconstruye POR
+   * FILA al instante fecha+hora de esa fila; todo en una transacción.
    */
   async crearMasivas(
     dto: CreateAlimentacionesMasivaDto,
@@ -151,10 +160,7 @@ export class AlimentacionService {
     if (dto.filas.length === 0) {
       throw new BadRequestException("Cargá al menos una fila de alimentación");
     }
-    const { corral, reparto } = await this.prepararCorral(
-      dto.idCorral,
-      empresaId,
-    );
+    const corral = await this.validarCorralAlimentar(dto.idCorral, empresaId);
     const creadas = await this.alimentacionRepository.manager.transaction(
       async (em) => {
         const alRepo = em.getRepository(Alimentacion);
@@ -165,18 +171,15 @@ export class AlimentacionService {
             fila.idDieta,
             empresaId,
           );
-          const fecha = this.aDate(fila.fecha);
-          if (!fecha) throw new BadRequestException("Fecha inválida");
-          const tasas = this.calcularTasas(Number(fila.cantidadKg), reparto);
-          await this.crearUna(em, alRepo, alLoteRepo, {
+          await this.crearFila(em, alRepo, alLoteRepo, {
             empresaId,
             corral,
             dieta,
             version,
-            fecha,
-            cantidadCorralKg: Number(fila.cantidadKg),
-            reparto,
-            tasas,
+            fechaStr: fila.fecha,
+            horaStr: fila.hora,
+            cantidadKg: Number(fila.cantidadKg),
+            ajuste: fila.ajuste,
             idUsuario: user?.id ?? null,
           });
           n += 1;
@@ -187,14 +190,155 @@ export class AlimentacionService {
     return { creadas };
   }
 
+  /** Crea una alimentación (una fila) reconstruyendo el corral al instante T. */
+  private async crearFila(
+    em: EntityManager,
+    alRepo: Repository<Alimentacion>,
+    alLoteRepo: Repository<AlimentacionLote>,
+    p: {
+      empresaId: number;
+      corral: Corral;
+      dieta: Dieta;
+      version: DietaVersion;
+      fechaStr: string;
+      horaStr?: string;
+      cantidadKg: number;
+      ajuste?: AjusteLoteDto[];
+      idUsuario: string | null;
+    },
+  ): Promise<number> {
+    const fecha = this.aDate(p.fechaStr);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    const hora = this.normalizarHora(p.horaStr) ?? "12:00:00";
+    const T = this.instanteStr(p.fechaStr, hora);
+    const reparto =
+      p.ajuste && p.ajuste.length > 0
+        ? await this.repartoDesdeAjuste(p.ajuste, p.empresaId)
+        : await this.estadoCorralEn(p.corral.id, T);
+    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
+    if (totalNCorral === 0) {
+      throw new BadRequestException(
+        "No hay animales vivos para alimentar en este corral en esa fecha/hora",
+      );
+    }
+    const tasas = this.calcularTasas(p.cantidadKg, reparto);
+    return this.crearUna(em, alRepo, alLoteRepo, {
+      empresaId: p.empresaId,
+      corral: p.corral,
+      dieta: p.dieta,
+      version: p.version,
+      fecha,
+      hora,
+      cantidadCorralKg: p.cantidadKg,
+      reparto,
+      tasas,
+      idUsuario: p.idUsuario,
+    });
+  }
+
+  /** Reparto a partir del ajuste editable del usuario (valida los lotes). */
+  private async repartoDesdeAjuste(
+    ajuste: AjusteLoteDto[],
+    empresaId: number,
+  ): Promise<RepartoRow[]> {
+    const ids = ajuste.map((a) => a.loteId);
+    const lotes = await this.loteEntidadRepository.find({
+      where: { id: In(ids) },
+    });
+    const loteById = new Map(lotes.map((l) => [l.id, l]));
+    const reparto: RepartoRow[] = [];
+    for (const a of ajuste) {
+      const lote = loteById.get(a.loteId);
+      if (!lote || lote.idEmpresa !== empresaId) {
+        throw new BadRequestException(
+          "Un lote del ajuste no pertenece a tu empresa",
+        );
+      }
+      if (a.nAnimales + a.nAnimalesEnfermeria <= 0) continue;
+      reparto.push({
+        loteId: lote.id,
+        loteNombre: lote.nombre,
+        idCliente: lote.idCliente,
+        nAnimales: a.nAnimales,
+        nAnimalesEnfermeria: a.nAnimalesEnfermeria,
+      });
+    }
+    return reparto;
+  }
+
+  /** Cambia fecha+hora de una alimentación y RECALCULA el reparto a ese instante. */
+  async editarFecha(
+    id: number,
+    dto: ActualizarAlimentacionFechaDto,
+    user: any,
+  ): Promise<AlimentacionView> {
+    const al = await this.alimentacionRepository.findOne({ where: { id } });
+    if (!al) throw new NotFoundException("Alimentación no encontrada");
+    if (!this.esSysAdmin(user)) {
+      const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
+        Number(e),
+      );
+      if (!userEmpresas.includes(al.idEmpresa)) {
+        throw new ForbiddenException(
+          "No tiene permisos sobre esta alimentación",
+        );
+      }
+    }
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    const hora = this.normalizarHora(dto.hora) ?? "12:00:00";
+    const T = this.instanteStr(dto.fecha, hora);
+    const reparto = await this.estadoCorralEn(al.idCorral, T);
+    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
+    if (totalNCorral === 0) {
+      throw new BadRequestException(
+        "No hay animales vivos para alimentar en ese corral en esa fecha/hora",
+      );
+    }
+    const tasas = this.calcularTasas(Number(al.cantidadCorralKg), reparto);
+
+    await this.alimentacionRepository.manager.transaction(async (em) => {
+      const alRepo = em.getRepository(Alimentacion);
+      const alLoteRepo = em.getRepository(AlimentacionLote);
+      await alLoteRepo.delete({ idAlimentacion: al.id });
+      al.fecha = fecha;
+      al.hora = hora;
+      al.cantidadKg = redondear(tasas.cantidadTotal, 2);
+      al.cantidadEnfermeriaKg = redondear(tasas.cantidadEnfermeria, 2);
+      al.cantidadPorAnimal = redondear(tasas.rate, 4);
+      al.nAnimales = tasas.totalNCorral;
+      al.nAnimalesEnfermeria = tasas.totalNEnfermeria;
+      await alRepo.save(al);
+      await alLoteRepo.save(
+        reparto.map((r) =>
+          alLoteRepo.create({
+            idAlimentacion: al.id,
+            idLote: r.loteId,
+            idCliente: r.idCliente,
+            nAnimales: r.nAnimales,
+            cantidadKg: redondear(tasas.rate * r.nAnimales, 2),
+            nAnimalesEnfermeria: r.nAnimalesEnfermeria,
+            cantidadEnfermeriaKg: redondear(
+              tasas.rate * r.nAnimalesEnfermeria,
+              2,
+            ),
+          }),
+        ),
+      );
+    });
+
+    return this.obtenerDetalle(al.id);
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers del alta
   // ---------------------------------------------------------------------------
 
-  private async prepararCorral(
+  /** Valida que el corral sea común, activo y de la empresa. */
+  private async validarCorralAlimentar(
     idCorral: number,
     empresaId: number,
-  ): Promise<{ corral: Corral; reparto: RepartoRow[] }> {
+  ): Promise<Corral> {
     const corral = await this.corralRepository.findOne({
       where: { id: idCorral },
     });
@@ -206,14 +350,29 @@ export class AlimentacionService {
         "Los corrales de enfermería se alimentan a través del corral de su lote",
       );
     }
-    const reparto = await this.calcularReparto(corral);
-    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
-    if (totalNCorral === 0) {
-      throw new BadRequestException(
-        "No hay animales vivos para alimentar en este corral",
-      );
+    return corral;
+  }
+
+  /**
+   * Vista previa de la reconstrucción del corral en un instante (fecha+hora):
+   * lotes con sus animales en común y en enfermería. La usa el modal para
+   * precargar los conteos editables antes de registrar.
+   */
+  async estadoCorral(
+    idCorral: number,
+    fecha: string,
+    hora: string | undefined,
+    user: any,
+  ): Promise<RepartoRow[]> {
+    const empresaId = this.empresaActual(user);
+    if (!empresaId) {
+      throw new BadRequestException("No tenés una empresa actual asociada");
     }
-    return { corral, reparto };
+    const corral = await this.validarCorralAlimentar(idCorral, empresaId);
+    const f = this.aDate(fecha);
+    if (!f) throw new BadRequestException("Fecha inválida");
+    const T = this.instanteStr(fecha, this.normalizarHora(hora) ?? "12:00:00");
+    return this.estadoCorralEn(corral.id, T);
   }
 
   private async validarDieta(
@@ -276,6 +435,7 @@ export class AlimentacionService {
       dieta: Dieta;
       version: DietaVersion;
       fecha: Date;
+      hora: string;
       cantidadCorralKg: number;
       reparto: RepartoRow[];
       tasas: ReturnType<AlimentacionService["calcularTasas"]>;
@@ -290,6 +450,7 @@ export class AlimentacionService {
         idDieta: p.dieta.id,
         idDietaVersion: p.version.id,
         fecha: p.fecha,
+        hora: p.hora,
         cantidadKg: redondear(t.cantidadTotal, 2),
         cantidadCorralKg: p.cantidadCorralKg,
         cantidadEnfermeriaKg: redondear(t.cantidadEnfermeria, 2),
@@ -316,43 +477,134 @@ export class AlimentacionService {
   }
 
   /**
-   * Reparto por lote de los animales VIVOS de un corral COMÚN:
-   *  - nAnimales = vivos EN el corral (id_corral_enfermeria NULL)
-   *  - nAnimalesEnfermeria = vivos del lote en ENFERMERÍA (estimación extra)
-   * Los muertos no cuentan.
+   * Reconstruye la composición del corral en el instante T (fecha+hora):
+   *  - lotes del corral en T → query de intervalos `lote_corral_asignacion`;
+   *  - por animal: existía (created ≤ T), vivo en T (no salió ni murió antes
+   *    de T) y en común o en enfermería según el último movimiento ≤ T.
+   * Devuelve por lote: nAnimales (común) y nAnimalesEnfermeria.
    */
-  private async calcularReparto(corral: Corral): Promise<RepartoRow[]> {
+  private async estadoCorralEn(
+    idCorral: number,
+    T: Date,
+  ): Promise<RepartoRow[]> {
+    const asign = await this.asignacionRepository
+      .createQueryBuilder("a")
+      .where("a.id_corral = :c", { c: idCorral })
+      .andWhere("a.desde <= :T", { T })
+      .andWhere("(a.hasta IS NULL OR a.hasta > :T)", { T })
+      .getMany();
+    const loteIds = Array.from(new Set(asign.map((a) => a.idLote)));
+    if (loteIds.length === 0) return [];
+
     const lotes = await this.loteEntidadRepository.find({
-      where: { idCorral: corral.id, activo: true },
-      order: { id: "ASC" },
+      where: { id: In(loteIds) },
     });
-    const reparto: RepartoRow[] = [];
-    for (const lote of lotes) {
-      const nCorral = await this.animalRepository
-        .createQueryBuilder("a")
-        .where(
-          "a.id_lote = :lote AND a.estado IN ('sano','enfermo') AND a.id_corral_enfermeria IS NULL",
-          { lote: lote.id },
-        )
-        .getCount();
-      const nEnfermeria = await this.animalRepository
-        .createQueryBuilder("a")
-        .where(
-          "a.id_lote = :lote AND a.estado IN ('sano','enfermo') AND a.id_corral_enfermeria IS NOT NULL",
-          { lote: lote.id },
-        )
-        .getCount();
-      if (nCorral + nEnfermeria > 0) {
-        reparto.push({
-          loteId: lote.id,
-          loteNombre: lote.nombre,
-          idCliente: lote.idCliente,
-          nAnimales: nCorral,
-          nAnimalesEnfermeria: nEnfermeria,
-        });
+    const loteById = new Map(lotes.map((l) => [l.id, l]));
+    const animales = await this.animalRepository.find({
+      where: { idLote: In(loteIds) },
+    });
+    if (animales.length === 0) return [];
+    const ids = animales.map((a) => a.id);
+
+    const movs = await this.movimientoRepository.find({
+      where: { idAnimal: In(ids) },
+      order: { fecha: "ASC", hora: "ASC" },
+    });
+    const salidas = await this.salidaAnimalRepository.find({
+      where: { idAnimal: In(ids) },
+      relations: { salida: true },
+    });
+
+    const movByAnimal = new Map<number, AnimalMovimiento[]>();
+    for (const m of movs) {
+      const arr = movByAnimal.get(m.idAnimal) ?? [];
+      arr.push(m);
+      movByAnimal.set(m.idAnimal, arr);
+    }
+    const salidaMin = new Map<number, Date>();
+    for (const sa of salidas) {
+      const inst = this.instanteDe(
+        sa.salida?.fecha,
+        sa.salida?.hora ?? "12:00:00",
+      );
+      const prev = salidaMin.get(sa.idAnimal);
+      if (!prev || inst < prev) salidaMin.set(sa.idAnimal, inst);
+    }
+
+    const comun = new Map<number, number>();
+    const enf = new Map<number, number>();
+    for (const a of animales) {
+      if (!(a.createdAt <= T)) continue; // no existía aún
+      const ms = movByAnimal.get(a.id) ?? [];
+      let muerto = false;
+      let ultimoEnf: AnimalMovimiento | null = null;
+      for (const m of ms) {
+        if (this.instanteDe(m.fecha, m.hora) > T) continue;
+        if (m.estadoDespues === "muerto") muerto = true;
+        if (m.tipo === "a_enfermeria" || m.tipo === "de_enfermeria") {
+          ultimoEnf = m; // ms ordenado asc → queda el último ≤ T
+        }
+      }
+      if (muerto) continue;
+      const ex = salidaMin.get(a.id);
+      if (ex && ex <= T) continue; // ya había salido
+      if (ultimoEnf?.tipo === "a_enfermeria") {
+        enf.set(a.idLote, (enf.get(a.idLote) ?? 0) + 1);
+      } else {
+        comun.set(a.idLote, (comun.get(a.idLote) ?? 0) + 1);
       }
     }
+
+    const reparto: RepartoRow[] = [];
+    for (const loteId of loteIds) {
+      const nCorral = comun.get(loteId) ?? 0;
+      const nEnf = enf.get(loteId) ?? 0;
+      if (nCorral + nEnf === 0) continue;
+      const lote = loteById.get(loteId);
+      reparto.push({
+        loteId,
+        loteNombre: lote?.nombre ?? "",
+        idCliente: lote?.idCliente ?? null,
+        nAnimales: nCorral,
+        nAnimalesEnfermeria: nEnf,
+      });
+    }
     return reparto;
+  }
+
+  /** 'HH:MM' | 'HH:MM:SS' → 'HH:MM:SS' (o null si no es válida). */
+  private normalizarHora(h?: string): string | null {
+    if (!h) return null;
+    const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(h.trim());
+    if (!m) return null;
+    return `${m[1]}:${m[2]}:${m[3] ?? "00"}`;
+  }
+
+  /** Instante local a partir de una fecha 'YYYY-MM-DD' y una hora 'HH:MM[:SS]'. */
+  private instanteStr(fechaIso: string, hora: string): Date {
+    const [y, mo, d] = fechaIso.slice(0, 10).split("-").map(Number);
+    const [h, mi, s] = (hora || "12:00:00")
+      .split(":")
+      .map((x) => parseInt(x, 10) || 0);
+    return new Date(y || 1970, (mo || 1) - 1, d || 1, h, mi, s);
+  }
+
+  /**
+   * Instante local a partir de una columna DATE (pg/TypeORM puede devolverla
+   * como `Date` o como string 'YYYY-MM-DD') y una hora 'HH:MM[:SS]'.
+   */
+  private instanteDe(
+    fecha: Date | string | null | undefined,
+    hora: string,
+  ): Date {
+    let iso = "1970-01-01";
+    if (fecha) {
+      iso =
+        typeof fecha === "string"
+          ? fecha.slice(0, 10)
+          : fecha.toISOString().slice(0, 10);
+    }
+    return this.instanteStr(iso, hora);
   }
 
   /** Lista de alimentaciones (con filtros opcionales) para el histórico/reporte. */
@@ -450,6 +702,7 @@ export class AlimentacionService {
     return {
       id: a.id,
       fecha: this.fechaIso(a.fecha),
+      hora: a.hora ?? "12:00:00",
       cantidadKg: Number(a.cantidadKg),
       cantidadCorralKg: Number(a.cantidadCorralKg),
       cantidadEnfermeriaKg: Number(a.cantidadEnfermeriaKg),

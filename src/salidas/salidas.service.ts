@@ -24,6 +24,8 @@ export interface SalidaItemView {
 export interface SalidaView {
   id: number;
   fecha: string;
+  /** Hora de la salida 'HH:MM:SS' (default 12:00). */
+  hora: string;
   tipo: string;
   nAnimales: number;
   pesoInicialTotal: number;
@@ -119,14 +121,28 @@ export class SalidasService {
           pesoFinal: Number(sa.pesoFinal),
           diferenciaKg: Number(sa.diferenciaKg ?? 0),
         }));
+      const redondear = (n: number) => Math.round(n * 100) / 100;
+      const pesoInicialTotal = redondear(
+        animalRows.reduce((acc, a) => acc + (a.pesoInicial ?? 0), 0),
+      );
+      const pesoFinalTotal = redondear(
+        animalRows.reduce((acc, a) => acc + a.pesoFinal, 0),
+      );
+      const diferenciaKg = redondear(
+        animalRows.reduce((acc, a) => acc + a.diferenciaKg, 0),
+      );
       return {
         id: s.id,
         fecha: this.fechaIso(s.fecha),
+        hora: s.hora ?? "12:00:00",
         tipo: s.tipo,
-        nAnimales: s.nAnimales,
-        pesoInicialTotal: Number(s.pesoInicialTotal),
-        pesoFinalTotal: Number(s.pesoFinalTotal),
-        diferenciaKg: Number(s.diferenciaKg),
+        // Conteo y totales se recalculan desde las filas reales `salida_animal`
+        // (la columna `n_animales`/totales puede quedar desincronizada si se
+        // borra un animal con salida: el CASCADE elimina su fila).
+        nAnimales: animalRows.length,
+        pesoInicialTotal,
+        pesoFinalTotal,
+        diferenciaKg,
         lote: { id: s.lote?.id ?? s.idLote, nombre: s.lote?.nombre ?? "" },
         corral:
           s.lote?.corral?.id != null
@@ -158,12 +174,12 @@ export class SalidasService {
     });
   }
 
-  /** Cambia la fecha de una salida (accesible según la empresa / cliente). */
+  /** Cambia fecha+hora de una salida (accesible según la empresa / cliente). */
   async editarFecha(
     id: number,
     dto: ActualizarSalidaFechaDto,
     user: any,
-  ): Promise<{ id: number; fecha: string }> {
+  ): Promise<{ id: number; fecha: string; hora: string }> {
     const salida = await this.salidaRepository.findOne({
       where: { id },
       relations: ["lote"],
@@ -188,9 +204,12 @@ export class SalidasService {
 
     const fecha = this.aDate(dto.fecha);
     if (!fecha) throw new BadRequestException("Fecha inválida");
+    const hm = /^(\d{2}):(\d{2})(:\d{2})?$/.exec((dto.hora ?? "12:00").trim());
+    const hora = hm ? `${hm[1]}:${hm[2]}:${hm[3] ?? "00"}` : "12:00:00";
     salida.fecha = fecha;
+    salida.hora = hora;
     await this.salidaRepository.save(salida);
-    return { id: salida.id, fecha: dto.fecha };
+    return { id: salida.id, fecha: dto.fecha, hora };
   }
 
   /** "Partida N" por orden de fecha/id dentro de cada lote (un query). */

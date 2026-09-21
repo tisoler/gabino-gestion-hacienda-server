@@ -9,6 +9,7 @@ import { Pesaje } from "../entities/pesaje.entity";
 import { Partida } from "../entities/partida.entity";
 import { Salida } from "../entities/salida.entity";
 import { SalidaAnimal } from "../entities/salida-animal.entity";
+import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
 import { LotesService } from "./lotes.service";
 import { LotesController } from "./lotes.controller";
 import { CatalogosModule } from "../catalogos/catalogos.module";
@@ -25,6 +26,7 @@ import { CatalogosModule } from "../catalogos/catalogos.module";
       Partida,
       Salida,
       SalidaAnimal,
+      LoteCorralAsignacion,
     ]),
     CatalogosModule,
   ],

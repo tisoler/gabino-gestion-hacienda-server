@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, IsNull, Repository } from "typeorm";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
 import { Corral } from "../entities/corral.entity";
@@ -25,6 +25,7 @@ import { CreateSalidaDto } from "./dto/create-salida.dto";
 import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
 import { Salida } from "../entities/salida.entity";
 import { SalidaAnimal } from "../entities/salida-animal.entity";
+import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { CatalogosService } from "../catalogos/catalogos.service";
 
@@ -71,9 +72,11 @@ export class LotesService {
     private salidaRepository: Repository<Salida>,
     @InjectRepository(SalidaAnimal)
     private salidaAnimalRepository: Repository<SalidaAnimal>,
+    @InjectRepository(LoteCorralAsignacion)
+    private asignacionRepository: Repository<LoteCorralAsignacion>,
     private cache: FirestoreCacheService,
     private catalogos: CatalogosService,
-  ) { }
+  ) {}
 
   /**
    * Lista lotes visibles para el usuario.
@@ -131,9 +134,9 @@ export class LotesService {
     const animalIds = animales.map((a) => a.id);
     const pesajes = animalIds.length
       ? await this.pesajeRepository.find({
-        where: { idAnimal: In(animalIds) },
-        order: { fecha: "ASC", id: "ASC" },
-      })
+          where: { idAnimal: In(animalIds) },
+          order: { fecha: "ASC", id: "ASC" },
+        })
       : [];
     // Partidas del lote (con nombre derivado "Partida N", nAnimales y si ya
     // tienen pesaje inicial). Con una sola partida la UI oculta la división.
@@ -281,7 +284,15 @@ export class LotesService {
       idCorral: createLoteDto.idCorral ?? null,
       color,
     });
-    return this.loteRepository.save(lote);
+    const saved = await this.loteRepository.save(lote);
+    if (saved.idCorral != null) {
+      await this.registrarAsignacionLote(
+        saved.id,
+        saved.idCorral,
+        saved.fecha ? new Date(saved.fecha) : new Date(),
+      );
+    }
+    return saved;
   }
 
   async update(
@@ -290,6 +301,7 @@ export class LotesService {
     user: any,
   ): Promise<Lote> {
     const lote = await this.getLoteVerificado(id, user);
+    const corralPrevio = lote.idCorral;
 
     if (updateLoteDto.nombre != null) lote.nombre = updateLoteDto.nombre;
     if (updateLoteDto.descripcion !== undefined) {
@@ -342,7 +354,12 @@ export class LotesService {
     if (updateLoteDto.color !== undefined) {
       lote.color = updateLoteDto.color ?? null;
     }
-    return this.loteRepository.save(lote);
+    const saved = await this.loteRepository.save(lote);
+    // Si cambió el corral, registrar el intervalo (cerrar el anterior / abrir nuevo).
+    if (saved.idCorral !== corralPrevio) {
+      await this.registrarAsignacionLote(saved.id, saved.idCorral, new Date());
+    }
+    return saved;
   }
 
   // ---------------------------------------------------------------------------
@@ -438,6 +455,35 @@ export class LotesService {
     );
   }
 
+  /**
+   * Registra la asignación lote↔corral como intervalo de validez: cierra el
+   * vigente con `desde` y abre uno nuevo si `idCorral` no es null. Histórico
+   * interno para reconstruir qué lotes estaban en un corral en un instante.
+   */
+  private async registrarAsignacionLote(
+    idLote: number,
+    idCorral: number | null,
+    desde: Date,
+  ): Promise<void> {
+    const vigente = await this.asignacionRepository.findOne({
+      where: { idLote, hasta: IsNull() },
+    });
+    if (vigente) {
+      vigente.hasta = desde;
+      await this.asignacionRepository.save(vigente);
+    }
+    if (idCorral != null) {
+      await this.asignacionRepository.save(
+        this.asignacionRepository.create({
+          idLote,
+          idCorral,
+          desde,
+          hasta: null,
+        }),
+      );
+    }
+  }
+
   /** Fecha del pesaje 'inicial' de una partida (null si aún no tiene). */
   private async fechaInicialPartida(idPartida: number): Promise<Date | null> {
     const row = await this.pesajeRepository
@@ -465,9 +511,9 @@ export class LotesService {
     });
     for (const p of partidas) {
       if ((await this.contarAnimalesSinInicial(p.id)) > 0) {
-        console.log(123, p)
-        return p
-      };
+        console.log(123, p);
+        return p;
+      }
     }
     console.log(124);
     return this.crearPartida(idLote, this.hoyDate());
@@ -492,9 +538,11 @@ export class LotesService {
         })
       ).map((p) => p.idAnimal),
     );
-    console.log(111, animales.filter(
-      (a) => a.pesoInicial == null && !conInicial.has(a.id),
-    ).length)
+    console.log(
+      111,
+      animales.filter((a) => a.pesoInicial == null && !conInicial.has(a.id))
+        .length,
+    );
     return animales.filter(
       (a) => a.pesoInicial == null && !conInicial.has(a.id),
     ).length;
@@ -830,6 +878,8 @@ export class LotesService {
         estadoDespues: estadoNuevo,
         corralOrigen: await this.nombreCorralActual(animal, lote),
         motivo: motivoTexto,
+        fecha: dto.fecha,
+        hora: dto.hora,
         user,
       });
     }
@@ -862,7 +912,13 @@ export class LotesService {
   async enviarEnfermeria(
     idLote: number,
     animalId: number,
-    dto: { idCorral?: number; motivo?: string; idMotivo?: number },
+    dto: {
+      idCorral?: number;
+      motivo?: string;
+      idMotivo?: number;
+      fecha?: string;
+      hora?: string;
+    },
     user: any,
   ): Promise<any> {
     const lote = await this.getLoteVerificado(idLote, user);
@@ -928,6 +984,8 @@ export class LotesService {
       corralOrigen: origenNombre,
       corralDestino: destino.nombre,
       motivo: motivoTexto,
+      fecha: dto.fecha,
+      hora: dto.hora,
       user,
     });
     return this.animalJson(saved);
@@ -979,6 +1037,8 @@ export class LotesService {
       corralOrigen: origen?.nombre ?? null,
       corralDestino: await this.nombreCorralDeLote(lote),
       motivo: motivoTexto,
+      fecha: dto.fecha,
+      hora: dto.hora,
       user,
     });
     return this.animalJson(saved);
@@ -1355,6 +1415,7 @@ export class LotesService {
             idLote: lote.id,
             idPartida: dto.tipo === "partida" ? dto.idPartida! : null,
             fecha,
+            hora: this.normalizarHora(dto.hora) ?? "12:00:00",
             tipo: dto.tipo,
             nAnimales: rows.length,
             pesoInicialTotal,
@@ -1409,6 +1470,8 @@ export class LotesService {
       { idCorralEnfermeria: null },
     );
     await this.loteRepository.update({ id: idLote }, { idCorral: null });
+    // El lote sale del corral → cerrar su intervalo vigente.
+    await this.registrarAsignacionLote(idLote, null, new Date());
   }
 
   /**
@@ -1735,6 +1798,8 @@ export class LotesService {
     corralOrigen?: string | null;
     corralDestino?: string | null;
     motivo?: string | null;
+    fecha?: string;
+    hora?: string;
     user: any;
   }) {
     let idMotivo: number | null = null;
@@ -1748,6 +1813,9 @@ export class LotesService {
       idMotivo = m.id;
       motivoNombre = m.nombre;
     }
+    const ahora = new Date();
+    const fecha = this.aDate(params.fecha) ?? ahora;
+    const hora = this.normalizarHora(params.hora) ?? this.horaDe(ahora);
     await this.movimientoRepository.save(
       this.movimientoRepository.create({
         idAnimal: params.idAnimal,
@@ -1759,8 +1827,24 @@ export class LotesService {
         idMotivo,
         motivo: motivoNombre,
         idUsuario: params.user?.id ?? null,
+        fecha,
+        hora,
       }),
     );
+  }
+
+  /** 'HH:MM' | 'HH:MM:SS' → 'HH:MM:SS' (o null si no es válida). */
+  private normalizarHora(h?: string): string | null {
+    if (!h) return null;
+    const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(h.trim());
+    if (!m) return null;
+    return `${m[1]}:${m[2]}:${m[3] ?? "00"}`;
+  }
+
+  /** Hora 'HH:MM:SS' de un Date local. */
+  private horaDe(d: Date): string {
+    const p = (n: number) => `${n}`.padStart(2, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   }
 
   /** Nombre del corral donde está el animal AHORA (enfermería o el del lote). */

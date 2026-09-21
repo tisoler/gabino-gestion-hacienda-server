@@ -47,6 +47,10 @@ export class Salida {
   @Column({ type: "date" })
   fecha: Date;
 
+  /** Instante de la salida (default 12:00). Junto a `fecha` forma el corte. */
+  @Column({ type: "time", default: "12:00:00" })
+  hora: string;
+
   /** 'lote' | 'partida' | 'animales'. */
   @Column({ type: "varchar", length: 12 })
   tipo: string;

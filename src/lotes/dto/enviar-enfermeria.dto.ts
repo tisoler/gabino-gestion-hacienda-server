@@ -1,4 +1,12 @@
-import { IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
+import {
+  IsDateString,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  Min,
+} from "class-validator";
 
 export class EnviarEnfermeriaDto {
   /**
@@ -9,6 +17,16 @@ export class EnviarEnfermeriaDto {
   @IsInt()
   @Min(1)
   idCorral?: number;
+
+  /** Fecha del movimiento (default hoy). Permite registrar en el pasado. */
+  @IsOptional()
+  @IsDateString()
+  fecha?: string;
+
+  /** Hora del movimiento 'HH:MM' (default ahora). */
+  @IsOptional()
+  @Matches(/^(\d{2}):(\d{2})(:\d{2})?$/)
+  hora?: string;
 
   /**
    * Motivo/enfermedad (texto libre desde el autocomplete). El server resuelve

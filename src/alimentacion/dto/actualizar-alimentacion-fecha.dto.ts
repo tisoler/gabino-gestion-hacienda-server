@@ -1,6 +1,6 @@
 import { IsDateString, IsOptional, Matches } from "class-validator";
 
-export class ActualizarSalidaFechaDto {
+export class ActualizarAlimentacionFechaDto {
   @IsDateString()
   fecha: string;
 

@@ -7,6 +7,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  Matches,
   Min,
   ValidateNested,
 } from "class-validator";
@@ -31,6 +32,11 @@ export class SalidaAnimalDto {
 export class CreateSalidaDto {
   @IsDateString()
   fecha: string;
+
+  /** Hora de la salida 'HH:MM' (default 12:00). Junto a fecha forma el corte. */
+  @IsOptional()
+  @Matches(/^(\d{2}):(\d{2})(:\d{2})?$/)
+  hora?: string;
 
   /** 'lote' (todos los vivos) | 'partida' (todos los vivos de la partida) | 'animales' (selección). */
   @IsIn(["lote", "partida", "animales"])

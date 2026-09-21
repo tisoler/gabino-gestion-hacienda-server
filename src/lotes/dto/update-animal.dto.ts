@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
   ValidateIf,
@@ -88,4 +89,14 @@ export class UpdateAnimalDto {
   @IsInt()
   @Min(1)
   idMotivo?: number;
+
+  /** Fecha del movimiento de cambio de estado (default hoy). */
+  @IsOptional()
+  @IsDateString()
+  fecha?: string;
+
+  /** Hora del movimiento de cambio de estado 'HH:MM' (default ahora). */
+  @IsOptional()
+  @Matches(/^(\d{2}):(\d{2})(:\d{2})?$/)
+  hora?: string;
 }

@@ -39,6 +39,7 @@ import { Alimentacion } from "./entities/alimentacion.entity";
 import { AlimentacionLote } from "./entities/alimentacion-lote.entity";
 import { Salida } from "./entities/salida.entity";
 import { SalidaAnimal } from "./entities/salida-animal.entity";
+import { LoteCorralAsignacion } from "./entities/lote-corral-asignacion.entity";
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { SalidaAnimal } from "./entities/salida-animal.entity";
           AlimentacionLote,
           Salida,
           SalidaAnimal,
+          LoteCorralAsignacion,
         ],
         synchronize: false, // Migraciones manuales
         logging: true,

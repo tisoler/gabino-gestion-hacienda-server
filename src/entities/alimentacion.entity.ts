@@ -54,6 +54,10 @@ export class Alimentacion {
   @Column({ type: "date" })
   fecha: Date;
 
+  /** Instante de la alimentación (default 12:00). Junto a `fecha` forma T. */
+  @Column({ type: "time", default: "12:00:00" })
+  hora: string;
+
   @Column({ name: "cantidad_kg", type: "decimal", precision: 12, scale: 2 })
   cantidadKg: number;
 

@@ -2,6 +2,9 @@ import {
   Body,
   Controller,
   Get,
+  Param,
+  ParseIntPipe,
+  Patch,
   Post,
   Query,
   Request,
@@ -10,6 +13,7 @@ import {
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiTags,
 } from "@nestjs/swagger";
@@ -18,6 +22,7 @@ import {
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
 } from "./dto/create-alimentacion.dto";
+import { ActualizarAlimentacionFechaDto } from "./dto/actualizar-alimentacion-fecha.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -28,6 +33,26 @@ import { Permissions } from "../auth/decorators/permissions.decorator";
 @ApiBearerAuth()
 export class AlimentacionController {
   constructor(private readonly service: AlimentacionService) {}
+
+  @Get("estado-corral")
+  @Permissions("escritura:alimento")
+  @ApiOperation({
+    summary: "Vista previa: animales del corral en un instante (fecha+hora)",
+    description:
+      "Reconstruye, por lote del corral, los animales en común y en enfermería en ese " +
+      "instante. Lo usa el modal de alimentar para precargar los conteos editables.",
+  })
+  @ApiQuery({ name: "idCorral", type: Number })
+  @ApiQuery({ name: "fecha", description: "YYYY-MM-DD" })
+  @ApiQuery({ name: "hora", required: false, description: "HH:MM (def 12:00)" })
+  estadoCorral(
+    @Request() req,
+    @Query("idCorral", ParseIntPipe) idCorral: number,
+    @Query("fecha") fecha: string,
+    @Query("hora") hora?: string,
+  ) {
+    return this.service.estadoCorral(idCorral, fecha, hora, req.user);
+  }
 
   @Get()
   @Permissions("lectura:alimento")
@@ -82,5 +107,19 @@ export class AlimentacionController {
     @Request() req,
   ): Promise<{ creadas: number }> {
     return this.service.crearMasivas(dto, req.user);
+  }
+
+  @Patch(":id")
+  @Permissions("escritura:alimento")
+  @ApiOperation({
+    summary: "Editar fecha y hora de una alimentación (recalcula el reparto)",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID de la alimentación" })
+  editarFecha(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ActualizarAlimentacionFechaDto,
+    @Request() req,
+  ): Promise<AlimentacionView> {
+    return this.service.editarFecha(id, dto, req.user);
   }
 }

@@ -83,6 +83,13 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
     de estado desde la grilla (`cambio_estado`, motivo obligatorio al pasar a enfermo/muerto).
     El motivo se resuelve/crea en el catálogo (`resolverMotivo`) y se guarda también como
     snapshot de texto junto a los nombres de corral (el historial no se deforma).
+    Cada movimiento tiene **`fecha`+`hora` de negocio** (default ahora al registrar, editables;
+    backfill desde `created_at`) → permiten reconstruir el estado del corral en un instante.
+11. **Historial lote↔corral** (`lote_corral_asignacion`): intervalos de validez
+    (`id_lote`, `id_corral`, `desde`, `hasta` NULL=vigente). Se escribe al crear lote, al
+    cambiar `lote.id_corral` (`PATCH /lotes/:id`) y al liberar el corral
+    (`quitarMuertosSiLoteSinVivos`). Sirve para saber **qué lotes estaban en un corral en un
+    instante dado** (query por rango, sin replay). `lote.id_corral` queda como caché del vigente.
 
 ## Módulos
 
@@ -173,29 +180,35 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   dieta global sólo admite ingredientes globales). La suma de % debe ser 100 (server). Ver
   decisión 10 de DESIGN.
 - **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones` (`escritura:alimento`)
-  con `{ idCorral, idDieta, cantidadKg, fecha }` (una alimentación) y
-  `POST /alimentaciones/masiva` con `{ idCorral, filas: [{ idDieta, cantidadKg, fecha }] }`
+  con `{ idCorral, idDieta, cantidadKg, fecha, hora? }` (una fila) y
+  `POST /alimentaciones/masiva` con `{ idCorral, filas: [{ idDieta, cantidadKg, fecha, hora? }] }`
   (varias filas, mismo corral, en una transacción) — sólo corrales COMUNES (las enfermerías se
-  alimentan a través del corral de su lote). La `cantidadKg` es la del CORRAL y se reparte por
-  fila. se reparte entre los lotes del corral según sus animales VIVOS presentes
-  (`estado IN ('sano','enfermo')` y `id_corral_enfermeria IS NULL`). Los animales del lote en
-  ENFERMERÍA reciben una ESTIMACIÓN extra a la misma tasa por animal (se SUMAN al total, no se
-  reparten del corral): `cantidad_corral_kg` (ingresada) + `cantidad_enfermeria_kg` =
-  `cantidad_kg` total; `n_animales`/`n_animales_enfermeria` y el mismo desglose por lote en
-  `alimentacion_lote`. `GET /alimentaciones` (`lectura:alimento`) lista el histórico con filtros
-  `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta`. Base del reporte de costo.
-  Ver el modelo en DESIGN.
+  alimentan a través del corral de su lote). Cada fila tiene **instante T = fecha + hora**
+  (default 12:00). La `cantidadKg` es la del CORRAL y se reparte por fila. **Los animales del
+  corral se RECONSTRUYEN al instante T** (`estadoCorralEn`): lotes del corral en T vía
+  `lote_corral_asignacion` (query de intervalos) y, por animal, vivo en T (existía, no salió ni
+  murió antes de T) y en común o en enfermería según el último `animal_movimiento` ≤ T. Tasa =
+  cantidad / vivos en el común (común); los del lote en ENFERMERÍA suman una ESTIMACIÓN extra a
+  la misma tasa. Guarda snapshot: `cantidad_corral_kg` + `cantidad_enfermeria_kg` =
+  `cantidad_kg`; `n_animales`/`n_animales_enfermeria` y el desglose por lote en `alimentacion_lote`.
+  `GET /alimentaciones` (`lectura:alimento`) lista el histórico con filtros
+  `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta`. `PATCH /alimentaciones/:id`
+  (`escritura:alimento`) edita `fecha`+`hora` y **recalcula** el reparto al nuevo instante.
+  `GET /alimentaciones/estado-corral?idCorral&fecha&hora` (`escritura:alimento`) devuelve la
+  reconstrucción (por lote: común/enfermería) para precargar el modal. El alta acepta un
+  `ajuste: [{loteId, nAnimales, nAnimalesEnfermeria}]` opcional por fila que **reemplaza** la
+  reconstrucción (override editable del usuario). Base del reporte de costo. Ver DESIGN.
 - **salidas** (egreso/entrega de animales + histórico): `POST /lotes/:id/salidas`
-  (`escritura:salida`) con `{ fecha, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
-  [{animalId, pesoFinal?, desbaste?}] }`. Salen animales VIVOS (sano/enfermo); 'lote'/'partida'
-  exigen el grupo completo. El grupo debe tener pesaje FINAL (se crea con la fecha de la salida
-  si falta; el item exige `pesoFinal`). Crea `salida` + `salida_animal` (snapshot de pesos y
-  diferencia), pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral
+  (`escritura:salida`) con `{ fecha, hora?, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
+  [{animalId, pesoFinal?, desbaste?}] }` (hora default 12:00). Salen animales VIVOS (sano/enfermo);
+  'lote'/'partida' exigen el grupo completo. El grupo debe tener pesaje FINAL (se crea con la fecha
+  de la salida si falta; el item exige `pesoFinal`). Crea `salida` + `salida_animal` (snapshot de
+  pesos y diferencia), pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral
   (limpia `lote.id_corral` y las enfermerías de sus animales — "se quitan los muertos del
   corral").   `GET /salidas` (`lectura:salida`) lista el histórico con filtros
   `idLote`/`idPartida`/`idCliente`/`fechaDesde`/`fechaHasta` y desglose por animal
-  (inicial → final + diferencia). `PATCH /salidas/:id` (`escritura:salida`) edita la `fecha`
-  de la salida (por ahora sólo eso; no re-toca los pesajes finales). Ver el modelo en DESIGN.
+  (inicial → final + diferencia; conteo y totales se recalculan desde las filas reales).
+  `PATCH /salidas/:id` (`escritura:salida`) edita `fecha`+`hora`. Ver el modelo en DESIGN.
 
 ## Convenciones
 

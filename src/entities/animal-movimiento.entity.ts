@@ -73,6 +73,14 @@ export class AnimalMovimiento {
   @Column({ name: "id_usuario", type: "varchar", length: 128, nullable: true })
   idUsuario: string | null;
 
+  /** Fecha de negocio del movimiento (default = hoy al registrar). */
+  @Column({ type: "date" })
+  fecha: Date;
+
+  /** Hora de negocio del movimiento (default = ahora al registrar). */
+  @Column({ type: "time" })
+  hora: string;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
 }
