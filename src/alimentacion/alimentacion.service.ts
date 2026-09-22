@@ -11,6 +11,7 @@ import { AlimentacionLote } from "../entities/alimentacion-lote.entity";
 import { Corral } from "../entities/corral.entity";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
+import { Partida } from "../entities/partida.entity";
 import { Dieta, DietaVersion } from "../entities/dieta.entity";
 import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
@@ -85,6 +86,8 @@ export class AlimentacionService {
     private loteEntidadRepository: Repository<Lote>,
     @InjectRepository(Animal)
     private animalRepository: Repository<Animal>,
+    @InjectRepository(Partida)
+    private partidaRepository: Repository<Partida>,
     @InjectRepository(Dieta)
     private dietaRepository: Repository<Dieta>,
     @InjectRepository(DietaVersion)
@@ -522,8 +525,9 @@ export class AlimentacionService {
   /**
    * Reconstruye la composición del corral en el instante T (fecha+hora):
    *  - lotes del corral en T → query de intervalos `lote_corral_asignacion`;
-   *  - por animal: existía (created ≤ T), vivo en T (no salió ni murió antes
-   *    de T) y en común o en enfermería según el último movimiento ≤ T.
+   *  - por animal: ingresó (`partida.fecha`, o `lote.fecha` si no tiene
+   *    partida), vivo en T (no salió ni murió antes de T) y en común o en
+   *    enfermería según el último movimiento ≤ T.
    * Devuelve por lote: nAnimales (común) y nAnimalesEnfermeria.
    */
   private async estadoCorralEn(
@@ -537,6 +541,7 @@ export class AlimentacionService {
       .andWhere("(a.hasta IS NULL OR a.hasta > :T)", { T })
       .getMany();
     const loteIds = Array.from(new Set(asign.map((a) => a.idLote)));
+
     if (loteIds.length === 0) return [];
 
     const lotes = await this.loteEntidadRepository.find({
@@ -548,6 +553,18 @@ export class AlimentacionService {
     });
     if (animales.length === 0) return [];
     const ids = animales.map((a) => a.id);
+    const partidaIds = Array.from(
+      new Set(
+        animales
+          .map((a) => a.idPartida)
+          .filter((id): id is number => id != null),
+      ),
+    );
+    const partidas =
+      partidaIds.length > 0
+        ? await this.partidaRepository.find({ where: { id: In(partidaIds) } })
+        : [];
+    const partidaFecha = new Map(partidas.map((p) => [p.id, p.fecha]));
 
     const movs = await this.movimientoRepository.find({
       where: { idAnimal: In(ids) },
@@ -577,7 +594,16 @@ export class AlimentacionService {
     const comun = new Map<number, number>();
     const enf = new Map<number, number>();
     for (const a of animales) {
-      if (!(a.createdAt <= T)) continue; // no existía aún
+      // Ingreso de negocio: fecha de su partida, o del lote si no tiene.
+      const fechaIngreso =
+        (a.idPartida != null ? partidaFecha.get(a.idPartida) : null) ??
+        loteById.get(a.idLote)?.fecha ??
+        null;
+      const inicio =
+        fechaIngreso != null
+          ? this.instanteDe(fechaIngreso, "00:00:00")
+          : a.createdAt;
+      if (!(inicio <= T)) continue; // el animal todavía no había ingresado
       const ms = movByAnimal.get(a.id) ?? [];
       let muerto = false;
       let ultimoEnf: AnimalMovimiento | null = null;

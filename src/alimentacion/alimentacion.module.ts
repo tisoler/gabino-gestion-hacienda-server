@@ -6,6 +6,7 @@ import { Corral } from "../entities/corral.entity";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
 import { Dieta, DietaVersion } from "../entities/dieta.entity";
+import { Partida } from "../entities/partida.entity";
 import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Salida } from "../entities/salida.entity";
@@ -23,6 +24,7 @@ import { AlimentacionController } from "./alimentacion.controller";
       Animal,
       Dieta,
       DietaVersion,
+      Partida,
       LoteCorralAsignacion,
       AnimalMovimiento,
       Salida,

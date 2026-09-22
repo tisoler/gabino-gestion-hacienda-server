@@ -511,11 +511,9 @@ export class LotesService {
     });
     for (const p of partidas) {
       if ((await this.contarAnimalesSinInicial(p.id)) > 0) {
-        console.log(123, p);
         return p;
       }
     }
-    console.log(124);
     return this.crearPartida(idLote, this.hoyDate());
   }
 
@@ -537,11 +535,6 @@ export class LotesService {
           select: ["idAnimal"],
         })
       ).map((p) => p.idAnimal),
-    );
-    console.log(
-      111,
-      animales.filter((a) => a.pesoInicial == null && !conInicial.has(a.id))
-        .length,
     );
     return animales.filter(
       (a) => a.pesoInicial == null && !conInicial.has(a.id),
@@ -1413,6 +1406,7 @@ export class LotesService {
           salidaRepo.create({
             idEmpresa: lote.idEmpresa,
             idLote: lote.id,
+            idCorral: lote.idCorral,
             idPartida: dto.tipo === "partida" ? dto.idPartida! : null,
             fecha,
             hora: this.normalizarHora(dto.hora) ?? "12:00:00",

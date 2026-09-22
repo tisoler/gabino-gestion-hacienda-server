@@ -74,7 +74,7 @@ export class SalidasService {
     const qb = this.salidaRepository
       .createQueryBuilder("s")
       .leftJoinAndSelect("s.lote", "lote")
-      .leftJoinAndSelect("lote.corral", "corral")
+      .leftJoinAndSelect("s.corral", "corral")
       .leftJoinAndSelect("s.empresa", "empresa")
       .leftJoinAndSelect("s.partida", "partida")
       .leftJoinAndSelect("s.animales", "sa")
@@ -145,8 +145,8 @@ export class SalidasService {
         diferenciaKg,
         lote: { id: s.lote?.id ?? s.idLote, nombre: s.lote?.nombre ?? "" },
         corral:
-          s.lote?.corral?.id != null
-            ? { id: s.lote.corral.id, nombre: s.lote.corral.nombre }
+          s.corral?.id != null
+            ? { id: s.corral.id, nombre: s.corral.nombre }
             : null,
         partida:
           s.idPartida != null

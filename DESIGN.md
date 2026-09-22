@@ -125,18 +125,19 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   y por lote en `alimentacion_lote` (`n_animales`, `cantidad_kg`, `n_animales_enfermeria`,
   `cantidad_enfermeria_kg`). Permisos `lectura:alimento` / `escritura:alimento`. Base del
   reporte de costo.
-- **Salidas de animales** — `salida` (evento: lote + fecha + tipo 'lote'|'partida'|'animales' +
-  n + totales) → `salida_animal` (snapshot por animal: `peso_inicial`, `peso_final`,
-  `diferencia_kg`). Salen animales **vivos** (`estado IN ('sano','enfermo')`; muertos y salidos
-  no). El grupo debe tener **pesaje final** (se crea con la fecha de la salida si falta) y, al
-  salir, el animal pasa a estado **'salido'** (deja de considerarse: no cuenta como vivo para
-  alimentación, pesajes, promedios ni el mapa de corrales). `diferencia_kg` del grupo = Σ
-  (peso final − peso inicial, BRUTOS). Si al salir el lote queda sin vivos, se **liberan los
-  muertos del corral**: `lote.id_corral = NULL` y se limpian las enfermerías de sus animales.
-  El pesaje FINAL del lote lista los ya salidos al final con su peso registrado (sólo lectura);
-  los objetivos de pesaje (inicial/intermedio/final) excluyen muertos y salidos. Permisos
-  `lectura:salida` / `escritura:salida`. Histórico en `GET /salidas` (filtros por lote/partida/
-  cliente/fechas).
+- **Salidas de animales** — `salida` (evento: lote + corral al momento de la salida + fecha +
+  tipo 'lote'|'partida'|'animales' + n + totales) → `salida_animal` (snapshot por animal:
+  `peso_inicial`, `peso_final`, `diferencia_kg`). Salen animales **vivos** (`estado IN
+  ('sano','enfermo')`; muertos y salidos no). El grupo debe tener **pesaje final** (se crea con
+  la fecha de la salida si falta) y, al salir, el animal pasa a estado **'salido'** (deja de
+  considerarse: no cuenta como vivo para alimentación, pesajes, promedios ni el mapa de
+  corrales). `salida.id_corral` se congela antes de liberar el corral del lote, para que el
+  histórico no dependa de `lote.id_corral` posterior. `diferencia_kg` del grupo = Σ (peso final
+  − peso inicial, BRUTOS). Si al salir el lote queda sin vivos, se **liberan los muertos del
+  corral**: `lote.id_corral = NULL` y se limpian las enfermerías de sus animales. El pesaje FINAL
+  del lote lista los ya salidos al final con su peso registrado (sólo lectura); los objetivos de
+  pesaje (inicial/intermedio/final) excluyen muertos y salidos. Permisos `lectura:salida` /
+  `escritura:salida`. Histórico en `GET /salidas` (filtros por lote/partida/ cliente/fechas).
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
   `motivo`, `ingrediente`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por

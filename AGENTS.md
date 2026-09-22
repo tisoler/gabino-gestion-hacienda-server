@@ -203,12 +203,15 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   [{animalId, pesoFinal?, desbaste?}] }` (hora default 12:00). Salen animales VIVOS (sano/enfermo);
   'lote'/'partida' exigen el grupo completo. El grupo debe tener pesaje FINAL (se crea con la fecha
   de la salida si falta; el item exige `pesoFinal`). Crea `salida` + `salida_animal` (snapshot de
-  pesos y diferencia), pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral
-  (limpia `lote.id_corral` y las enfermerías de sus animales — "se quitan los muertos del
-  corral").   `GET /salidas` (`lectura:salida`) lista el histórico con filtros
+  pesos y diferencia) y congela `salida.id_corral` desde `lote.id_corral` antes de liberar el corral;
+  pasa el estado a **'salido'** y, si el lote queda sin vivos, libera el corral (limpia
+  `lote.id_corral` y las enfermerías de sus animales — "se quitan los muertos del corral").
+  `GET /salidas` (`lectura:salida`) lista el histórico con filtros
   `idLote`/`idPartida`/`idCliente`/`fechaDesde`/`fechaHasta` y desglose por animal
   (inicial → final + diferencia; conteo y totales se recalculan desde las filas reales).
-  `PATCH /salidas/:id` (`escritura:salida`) edita `fecha`+`hora`. Ver el modelo en DESIGN.
+  `PATCH /salidas/:id` (`escritura:salida`) edita `fecha`+`hora`. Aplica la migración
+  `016-salida-corral-snapshot.sql`; las salidas previas quedan con `id_corral` NULL hasta
+  completarlas. Ver el modelo en DESIGN.
 
 ## Convenciones
 

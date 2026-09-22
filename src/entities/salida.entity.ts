@@ -10,6 +10,7 @@ import {
 } from "typeorm";
 import { Empresa } from "./empresa.entity";
 import { Lote } from "./lote.entity";
+import { Corral } from "./corral.entity";
 import { Partida } from "./partida.entity";
 import { SalidaAnimal } from "./salida-animal.entity";
 
@@ -36,6 +37,17 @@ export class Salida {
   @ManyToOne(() => Lote)
   @JoinColumn({ name: "id_lote" })
   lote: Lote;
+
+  /**
+   * Snapshot del corral del lote AL MOMENTO de la salida. `lote.id_corral` puede
+   * pasar a NULL (o cambiar) después; este valor no debe recalcularse.
+   */
+  @Column({ name: "id_corral", type: "int", nullable: true })
+  idCorral: number | null;
+
+  @ManyToOne(() => Corral, { nullable: true })
+  @JoinColumn({ name: "id_corral" })
+  corral: Corral | null;
 
   @Column({ name: "id_partida", type: "int", nullable: true })
   idPartida: number | null;
