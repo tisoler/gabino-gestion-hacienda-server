@@ -22,7 +22,7 @@ import {
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
 } from "./dto/create-alimentacion.dto";
-import { ActualizarAlimentacionFechaDto } from "./dto/actualizar-alimentacion-fecha.dto";
+import { ActualizarAlimentacionDto } from "./dto/actualizar-alimentacion.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { Permissions } from "../auth/decorators/permissions.decorator";
@@ -112,14 +112,15 @@ export class AlimentacionController {
   @Patch(":id")
   @Permissions("escritura:alimento")
   @ApiOperation({
-    summary: "Editar fecha y hora de una alimentación (recalcula el reparto)",
+    summary:
+      "Editar una alimentación (fecha/hora/dieta/cantidad/ajuste) y recalcular",
   })
   @ApiParam({ name: "id", type: Number, description: "ID de la alimentación" })
-  editarFecha(
+  editar(
     @Param("id", ParseIntPipe) id: number,
-    @Body() dto: ActualizarAlimentacionFechaDto,
+    @Body() dto: ActualizarAlimentacionDto,
     @Request() req,
   ): Promise<AlimentacionView> {
-    return this.service.editarFecha(id, dto, req.user);
+    return this.service.editar(id, dto, req.user);
   }
 }

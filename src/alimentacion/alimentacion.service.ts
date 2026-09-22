@@ -22,7 +22,7 @@ import {
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
 } from "./dto/create-alimentacion.dto";
-import { ActualizarAlimentacionFechaDto } from "./dto/actualizar-alimentacion-fecha.dto";
+import { ActualizarAlimentacionDto } from "./dto/actualizar-alimentacion.dto";
 
 /** Fila interna del reparto por lote (antes de armar la vista). */
 export interface RepartoRow {
@@ -207,21 +207,14 @@ export class AlimentacionService {
       idUsuario: string | null;
     },
   ): Promise<number> {
-    const fecha = this.aDate(p.fechaStr);
-    if (!fecha) throw new BadRequestException("Fecha inválida");
-    const hora = this.normalizarHora(p.horaStr) ?? "12:00:00";
-    const T = this.instanteStr(p.fechaStr, hora);
-    const reparto =
-      p.ajuste && p.ajuste.length > 0
-        ? await this.repartoDesdeAjuste(p.ajuste, p.empresaId)
-        : await this.estadoCorralEn(p.corral.id, T);
-    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
-    if (totalNCorral === 0) {
-      throw new BadRequestException(
-        "No hay animales vivos para alimentar en este corral en esa fecha/hora",
-      );
-    }
-    const tasas = this.calcularTasas(p.cantidadKg, reparto);
+    const { fecha, hora, reparto, tasas } = await this.resolverReparto(
+      p.empresaId,
+      p.corral.id,
+      p.fechaStr,
+      p.horaStr,
+      p.cantidadKg,
+      p.ajuste,
+    );
     return this.crearUna(em, alRepo, alLoteRepo, {
       empresaId: p.empresaId,
       corral: p.corral,
@@ -234,6 +227,41 @@ export class AlimentacionService {
       tasas,
       idUsuario: p.idUsuario,
     });
+  }
+
+  /**
+   * Resuelve el instante T (fecha+hora), el reparto (override `ajuste` o
+   * reconstrucción del corral en T) y las tasas a partir de la cantidad.
+   */
+  private async resolverReparto(
+    empresaId: number,
+    idCorral: number,
+    fechaStr: string,
+    horaStr: string | undefined,
+    cantidadKg: number,
+    ajuste?: AjusteLoteDto[],
+  ): Promise<{
+    fecha: Date;
+    hora: string;
+    reparto: RepartoRow[];
+    tasas: ReturnType<AlimentacionService["calcularTasas"]>;
+  }> {
+    const fecha = this.aDate(fechaStr);
+    if (!fecha) throw new BadRequestException("Fecha inválida");
+    const hora = this.normalizarHora(horaStr) ?? "12:00:00";
+    const T = this.instanteStr(fechaStr, hora);
+    const reparto =
+      ajuste && ajuste.length > 0
+        ? await this.repartoDesdeAjuste(ajuste, empresaId)
+        : await this.estadoCorralEn(idCorral, T);
+    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
+    if (totalNCorral === 0) {
+      throw new BadRequestException(
+        "No hay animales vivos para alimentar en este corral en esa fecha/hora",
+      );
+    }
+    const tasas = this.calcularTasas(cantidadKg, reparto);
+    return { fecha, hora, reparto, tasas };
   }
 
   /** Reparto a partir del ajuste editable del usuario (valida los lotes). */
@@ -266,10 +294,10 @@ export class AlimentacionService {
     return reparto;
   }
 
-  /** Cambia fecha+hora de una alimentación y RECALCULA el reparto a ese instante. */
-  async editarFecha(
+  /** Edita una alimentación (fecha/hora/dieta/cantidad/ajuste) y RECALCULA el reparto. */
+  async editar(
     id: number,
-    dto: ActualizarAlimentacionFechaDto,
+    dto: ActualizarAlimentacionDto,
     user: any,
   ): Promise<AlimentacionView> {
     const al = await this.alimentacionRepository.findOne({ where: { id } });
@@ -284,18 +312,30 @@ export class AlimentacionService {
         );
       }
     }
-    const fecha = this.aDate(dto.fecha);
-    if (!fecha) throw new BadRequestException("Fecha inválida");
-    const hora = this.normalizarHora(dto.hora) ?? "12:00:00";
-    const T = this.instanteStr(dto.fecha, hora);
-    const reparto = await this.estadoCorralEn(al.idCorral, T);
-    const totalNCorral = reparto.reduce((acc, r) => acc + r.nAnimales, 0);
-    if (totalNCorral === 0) {
-      throw new BadRequestException(
-        "No hay animales vivos para alimentar en ese corral en esa fecha/hora",
+    const cantidadKg =
+      dto.cantidadKg != null
+        ? Number(dto.cantidadKg)
+        : Number(al.cantidadCorralKg);
+    const { fecha, hora, reparto, tasas } = await this.resolverReparto(
+      al.idEmpresa,
+      al.idCorral,
+      dto.fecha,
+      dto.hora,
+      cantidadKg,
+      dto.ajuste,
+    );
+
+    // Dieta nueva (opcional): validar y resolver su versión vigente.
+    let idDieta = al.idDieta;
+    let idDietaVersion = al.idDietaVersion;
+    if (dto.idDieta != null && dto.idDieta !== al.idDieta) {
+      const { dieta, version } = await this.validarDieta(
+        dto.idDieta,
+        al.idEmpresa,
       );
+      idDieta = dieta.id;
+      idDietaVersion = version.id;
     }
-    const tasas = this.calcularTasas(Number(al.cantidadCorralKg), reparto);
 
     await this.alimentacionRepository.manager.transaction(async (em) => {
       const alRepo = em.getRepository(Alimentacion);
@@ -303,6 +343,9 @@ export class AlimentacionService {
       await alLoteRepo.delete({ idAlimentacion: al.id });
       al.fecha = fecha;
       al.hora = hora;
+      al.idDieta = idDieta;
+      al.idDietaVersion = idDietaVersion;
+      al.cantidadCorralKg = redondear(cantidadKg, 2);
       al.cantidadKg = redondear(tasas.cantidadTotal, 2);
       al.cantidadEnfermeriaKg = redondear(tasas.cantidadEnfermeria, 2);
       al.cantidadPorAnimal = redondear(tasas.rate, 4);

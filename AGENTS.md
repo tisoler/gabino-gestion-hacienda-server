@@ -193,8 +193,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `cantidad_kg`; `n_animales`/`n_animales_enfermeria` y el desglose por lote en `alimentacion_lote`.
   `GET /alimentaciones` (`lectura:alimento`) lista el histórico con filtros
   `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta`. `PATCH /alimentaciones/:id`
-  (`escritura:alimento`) edita `fecha`+`hora` y **recalcula** el reparto al nuevo instante.
-  `GET /alimentaciones/estado-corral?idCorral&fecha&hora` (`escritura:alimento`) devuelve la
+  (`escritura:alimento`) edita `fecha`+`hora` (y opcionalmente `idDieta`, `cantidadKg`,
+  `ajuste`) y **recalcula** el reparto al nuevo instante. `GET /alimentaciones/estado-corral?idCorral&fecha&hora` (`escritura:alimento`) devuelve la
   reconstrucción (por lote: común/enfermería) para precargar el modal. El alta acepta un
   `ajuste: [{loteId, nAnimales, nAnimalesEnfermeria}]` opcional por fila que **reemplaza** la
   reconstrucción (override editable del usuario). Base del reporte de costo. Ver DESIGN.

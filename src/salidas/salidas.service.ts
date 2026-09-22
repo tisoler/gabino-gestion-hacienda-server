@@ -204,7 +204,9 @@ export class SalidasService {
 
     const fecha = this.aDate(dto.fecha);
     if (!fecha) throw new BadRequestException("Fecha inválida");
-    const hm = /^(\d{2}):(\d{2})(:\d{2})?$/.exec((dto.hora ?? "12:00").trim());
+    const hm = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      (dto.hora ?? "12:00").trim(),
+    );
     const hora = hm ? `${hm[1]}:${hm[2]}:${hm[3] ?? "00"}` : "12:00:00";
     salida.fecha = fecha;
     salida.hora = hora;
