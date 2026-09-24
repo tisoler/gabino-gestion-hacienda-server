@@ -1048,7 +1048,7 @@ export class LotesService {
     }
     const movimientos = await this.movimientoRepository.find({
       where: { idAnimal: animal.id },
-      order: { createdAt: "DESC", id: "DESC" },
+      order: { fecha: "DESC", hora: "DESC", id: "DESC" },
     });
     const usuarios = await this.cache.getOrLoadUsuarios();
     const nombreByUid = new Map<string, string | null>(
@@ -1066,8 +1066,21 @@ export class LotesService {
       usuarioNombre: m.idUsuario
         ? (nombreByUid.get(m.idUsuario) ?? null)
         : null,
-      fecha: m.createdAt,
+      // Fecha+hora de NEGOCIO del movimiento (no `created_at`).
+      fecha: this.momentoIso(m.fecha, m.hora),
     }));
+  }
+
+  /** 'YYYY-MM-DDTHH:MM:SS' (local) a partir de una columna DATE + hora. */
+  private momentoIso(fecha: Date | string | null, hora: string | null): string {
+    const d =
+      fecha == null
+        ? ""
+        : typeof fecha === "string"
+          ? fecha.slice(0, 10)
+          : fecha.toISOString().slice(0, 10);
+    const h = (hora ?? "00:00:00").slice(0, 8);
+    return d ? `${d}T${h}` : "";
   }
 
   // ---------------------------------------------------------------------------
