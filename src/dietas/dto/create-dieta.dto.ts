@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -13,23 +14,44 @@ import {
   ValidateIf,
   ValidateNested,
 } from "class-validator";
+import { INSUMO_UNIDADES } from "../../insumos/dto/create-insumo.dto";
 
 /**
- * Ingrediente de una dieta: existente (`idIngrediente`) o NUEVO (`nombre`, que
- * el server persiste en el alcance de la dieta). Siempre con su `porcentaje`.
+ * Insumo de una dieta: existente (`idInsumo`, con categoría "Ingrediente
+ * dieta" y alcance compatible) o NUEVO (`nombre` + opcionales, que el server
+ * crea como insumo con esa categoría y el alcance de la dieta — "crear vía
+ * dieta", sin exigir escritura:insumo).
  */
-export class IngredienteDietaDto {
+export class InsumoDietaDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  idIngrediente?: number;
+  idInsumo?: number;
 
   @IsOptional()
   @ValidateIf((_o, v) => v !== null && v !== undefined)
   @IsString()
-  @IsNotEmpty({ message: "El nombre del ingrediente es obligatorio" })
+  @IsNotEmpty({ message: "El nombre del insumo es obligatorio" })
   @MaxLength(100)
   nombre?: string;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsString()
+  @MaxLength(255)
+  descripcion?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  precioReferencia?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null && v !== undefined && v !== "")
+  @IsString()
+  @IsIn(INSUMO_UNIDADES as unknown as string[])
+  unidad?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1, { message: "El porcentaje debe ser mayor que 0" })
@@ -44,10 +66,10 @@ export class CreateDietaDto {
   nombre: string;
 
   @IsArray()
-  @ArrayNotEmpty({ message: "Agregá al menos un ingrediente" })
+  @ArrayNotEmpty({ message: "Agregá al menos un insumo" })
   @ValidateNested({ each: true })
-  @Type(() => IngredienteDietaDto)
-  ingredientes: IngredienteDietaDto[];
+  @Type(() => InsumoDietaDto)
+  insumos: InsumoDietaDto[];
 
   /**
    * Sólo sys-admin: empresa destino (null = dieta GLOBAL). Para el resto se

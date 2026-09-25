@@ -36,12 +36,14 @@ Roles en Firestore (`roles/{id}`). idRol: `1=sys-admin`, `2=anfitrion`, `3=opera
 | Rol | Permisos |
 |---|---|
 | `sys-admin` | todos |
-| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento` |
-| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento` |
+| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:insumo`, `escritura:insumo` |
+| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:insumo`, `escritura:insumo` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
 
 `lectura:dieta` ve sólo dietas activas + calculadora; `escritura:dieta` ve todas las
-versiones, crea/versiona y activa/desactiva dietas enteras.
+versiones, crea/versiona y activa/desactiva dietas enteras. `lectura:insumo` ve el
+catálogo de insumos (sólo activos); `escritura:insumo` ve también los desactivados,
+crea/edita y activa/desactiva.
 
 Flujo de registro: un usuario se registra **sin rol** (`idRol: null`) y queda pendiente.
 `sys-admin` le asigna el rol (**anfitrión**, **cliente** u **operario**) desde la sección
@@ -105,11 +107,13 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   `id_empresa` **NULL = dieta GLOBAL** visible/usable por todas las empresas, como los catálogos
   globales) con `activa` ON/OFF de la dieta ENTERA (manual, `escritura:dieta`) → `dieta_version`
   (composición; `version` int, `activa` = vigente; al crear una nueva se desactivan las anteriores
-  → histórico, base del futuro registro de alimentación de corrales) → `dieta_version_ingrediente`
-  (`id_ingrediente` FK + `porcentaje` NUMERIC, la suma de % de una versión es 100, validado en la
-  app). Una dieta NO se edita: se versiona (`POST /dietas` crea versión si ya existe el nombre en
-  el mismo alcance). `ingrediente` es un catálogo multitenant más. El **sys-admin crea/versiona
-  para Global o para una empresa** (`idEmpresa` null/número); el resto (`escritura:dieta`) sólo
+   → histórico, base del futuro registro de alimentación de corrales) → `dieta_version_insumo`
+   (`id_insumo` FK + `porcentaje` NUMERIC, la suma de % de una versión es 100, validado en la
+   app). Una dieta NO se edita: se versiona (`POST /dietas` crea versión si ya existe el nombre en
+   el mismo alcance). La dieta se compone de **insumos** con categoría "Ingrediente dieta"
+   (global o de la empresa; fijas globales: 1 = Ingrediente dieta, 2 = Veterinaria). El
+   **sys-admin crea/versiona
+   para Global o para una empresa** (`idEmpresa` null/número); el resto (`escritura:dieta`) sólo
 para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:dieta` ve
    globales + activas de su empresa; la calculadora de raciones es sólo de la UI.
 - **Alimentación de corrales** — `alimentacion` (evento: corral + dieta + versión + fecha +
@@ -138,8 +142,18 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   del lote lista los ya salidos al final con su peso registrado (sólo lectura); los objetivos de
   pesaje (inicial/intermedio/final) excluyen muertos y salidos. Permisos `lectura:salida` /
   `escritura:salida`. Histórico en `GET /salidas` (filtros por lote/partida/ cliente/fechas).
+- `categoria_insumo` + `insumo` — catálogo de insumos: `id`, `id_empresa` FK **nullable**
+  (NULL = **global**; con valor = de esa empresa), `nombre` (único por alcance,
+  case-insensitive), `descripcion` (sólo insumo, opcional), `precio_referencia` (NUMERIC,
+  número sin moneda), `unidad` (`kg`|`unidad`), `id_categoria` FK (nullable), `activo`,
+  timestamps. Las categorías se crean inline desde el modal de insumo: si el nombre tipeado
+  no existe, el server la busca o la crea con el alcance del insumo (mismo mecanismo que los
+  insumos nuevos al guardar una dieta). Permisos `lectura:insumo` / `escritura:insumo`. `GET /insumos`
+  (`estado=activas|todas`, `scope=todas|global|empresa`, `idEmpresa` sólo sys-admin);
+  `GET /insumos/categorias`; `POST /insumos`; `PATCH /insumos/:id` (los globales sólo los
+  gestiona el sys-admin); `PATCH /insumos/:id/activo`. Migración `017-insumos.sql`.
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
-  `motivo`, `ingrediente`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
+  `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
   `(COALESCE(id_empresa,0), LOWER(nombre))`. Seed global (migración 004): razas Braford,
   Brangus, Hereford, Aberdeen-Angus, Cruza europea; categorías Ternero/a, Novillo/Vaquillona,
@@ -165,11 +179,11 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 
 ```jsonc
 // roles/1
-{ "nombre": "sys-admin", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
+{ "nombre": "sys-admin", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w", "p_insumo_r", "p_insumo_w"] }
 // roles/2
-{ "nombre": "anfitrion", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
+{ "nombre": "anfitrion", "permisos": ["p_empresa_r", "p_empresa_w", "p_cliente_r", "p_cliente_w", "p_lote_r", "p_lote_w", "p_corral_r", "p_corral_w", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w", "p_insumo_r", "p_insumo_w"] }
 // roles/3
-{ "nombre": "operario", "permisos": ["p_lote_r", "p_lote_w", "p_corral_r", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w"] }
+{ "nombre": "operario", "permisos": ["p_lote_r", "p_lote_w", "p_corral_r", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w", "p_insumo_r", "p_insumo_w"] }
 // roles/4
 { "nombre": "cliente", "permisos": ["p_lote_r"] }
 
@@ -185,6 +199,8 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 // permisos/p_dieta_w    { "nombre": "escritura:dieta" }
 // permisos/p_alimento_r { "nombre": "lectura:alimento" }
 // permisos/p_alimento_w { "nombre": "escritura:alimento" }
+// permisos/p_insumo_r   { "nombre": "lectura:insumo" }
+// permisos/p_insumo_w   { "nombre": "escritura:insumo" }
 
 // usuarios/{uid}  — el bootstrap del BE (POST /usuarios/bootstrap, Admin SDK) lo crea con
 //                  { idRol: null, nombre } (sin rol, pendiente); el FE nunca escribe directo
@@ -241,7 +257,8 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 10. **Dietas (alimentación)**: dieta lógica (`id_empresa`+`nombre`) con `activa` ON/OFF de la
     dieta entera (manual, `escritura:dieta`) y versiones (`dieta_version`, la vigente `activa`,
     las anteriores histórico). No se edita: `POST /dietas` crea dieta o nueva versión (misma
-    empresa+nombre → nueva `version`, desactiva las previas). `dieta_version_ingrediente` guarda
-    `porcentaje` y la app/server exige suma = 100. `ingrediente` es un catálogo más. `lectura:dieta`
+    empresa+nombre → nueva `version`, desactiva las previas). `dieta_version_insumo` guarda
+    `porcentaje` y la app/server exige suma = 100. La dieta se compone de insumos con
+    categoría "Ingrediente dieta". `lectura:dieta`
     ve sólo activas + calculadora; `escritura:dieta` ve todas las versiones y gestiona. Base para
     el futuro histórico de alimentación de corrales.

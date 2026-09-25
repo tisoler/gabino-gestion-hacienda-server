@@ -171,14 +171,16 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   global). Ver reglas 9 y 10.
 - **dietas** (módulo de alimentación): `GET /dietas?estado=activas|todas` (`lectura:dieta`;
   `todas` requiere `escritura:dieta`) devuelve cada dieta con su versión vigente e
-  ingredientes (incluye las GLOBALES, `id_empresa` NULL) · `POST /dietas` (`escritura:dieta`)
+  insumos (incluye las GLOBALES, `id_empresa` NULL) · `POST /dietas` (`escritura:dieta`)
   crea dieta o NUEVA versión si ya existe el nombre en el mismo alcance (versiona: desactiva la
   anterior). El **sys-admin** puede crear para Global (`idEmpresa: null`) o una empresa
   (`idEmpresa: n`); el resto sólo para la suya. `GET /dietas/:id/versiones` (histórico) y
   `PATCH /dietas/:id/activo` (activa/desactiva la dieta ENTERA) — las dietas globales sólo las
-  gestiona el sys-admin. Ingredientes por catálogo `ingrediente` (`/catalogos/ingrediente`; una
-  dieta global sólo admite ingredientes globales). La suma de % debe ser 100 (server). Ver
-  decisión 10 de DESIGN.
+  gestiona el sys-admin. La dieta se compone de **insumos** (`dieta_version_insumo`):
+  cada item es un `idInsumo` existente (con categoría "Ingrediente dieta", global o de la
+  empresa; para dieta global sólo insumos globales) o un `nombre` nuevo que el server crea
+  como insumo con esa categoría y el alcance de la dieta ("crear vía dieta", sin exigir
+  escritura:insumo). La suma de % debe ser 100 (server). Ver decisión 10 de DESIGN.
 - **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones` (`escritura:alimento`)
   con `{ idCorral, idDieta, cantidadKg, fecha, hora? }` (una fila) y
   `POST /alimentaciones/masiva` con `{ idCorral, filas: [{ idDieta, cantidadKg, fecha, hora? }] }`
@@ -212,6 +214,16 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `PATCH /salidas/:id` (`escritura:salida`) edita `fecha`+`hora`. Aplica la migración
   `016-salida-corral-snapshot.sql`; las salidas previas quedan con `id_corral` NULL hasta
   completarlas. Ver el modelo en DESIGN.
+- **insumos** (catálogo de insumos + categorías): `GET /insumos?estado=activas|todas&scope=todas|global|empresa&idEmpresa=`
+  (`lectura:insumo`; `todas` requiere `escritura:insumo`; `idEmpresa` sólo sys-admin) con su
+  categoría · `GET /insumos/categorias` (globales + empresa) · `POST /insumos`
+  (`escritura:insumo`): el sys-admin elige el alcance (`idEmpresa` null = GLOBAL), el resto
+  crea para su empresa; la categoría puede ser existente (`idCategoria`, global o de la
+  empresa destino) o nueva (`categoriaNueva`: se busca o se crea con el alcance del insumo,
+  mismo mecanismo que los insumos nuevos al guardar una dieta) · `PATCH /insumos/:id` (los globales sólo los
+  gestiona el sys-admin; sólo él cambia el alcance) · `PATCH /insumos/:id/activo`
+  (activa/desactiva el insumo entero). Nombre único por alcance (case-insensitive,
+  `capitalizarNombre`, regla 9). Migración `017-insumos.sql`. Ver el modelo en DESIGN.
 
 ## Convenciones
 
@@ -224,16 +236,19 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 | Rol | Permisos |
 |---|---|
 | `sys-admin` | todos |
-| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida` |
-| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida` |
+| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo` |
+| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
 
 `lectura:dieta` ve sólo dietas activas; `escritura:dieta` ve todas las versiones,
 crea/versiona y activa/desactiva dietas enteras. `lectura:alimento` ve el histórico de
 alimentación; `escritura:alimento` registra alimentaciones. `lectura:salida` ve el histórico de
-salidas; `escritura:salida` da salida a animales.
+salidas; `escritura:salida` da salida a animales. `lectura:insumo` ve el catálogo de
+insumos (sólo activos); `escritura:insumo` ve también los desactivados, crea/edita y
+activa/desactiva.
 
-**Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w` a los roles
-1, 2 y 3 (además de los ya documentados `p_dieta_r/w` y `p_alimento_r/w`).
+**Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w` y
+`p_insumo_r` / `p_insumo_w` a los roles 1, 2 y 3 (además de los ya documentados
+`p_dieta_r/w` y `p_alimento_r/w`).
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

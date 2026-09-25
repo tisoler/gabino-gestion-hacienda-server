@@ -12,6 +12,7 @@ import { CatalogosModule } from "./catalogos/catalogos.module";
 import { DietasModule } from "./dietas/dietas.module";
 import { AlimentacionModule } from "./alimentacion/alimentacion.module";
 import { SalidasModule } from "./salidas/salidas.module";
+import { InsumosModule } from "./insumos/insumos.module";
 
 import { Empresa } from "./entities/empresa.entity";
 import { EmpresaCliente } from "./entities/empresa-cliente.entity";
@@ -23,7 +24,6 @@ import { Pesaje } from "./entities/pesaje.entity";
 import { Partida } from "./entities/partida.entity";
 import {
   Categoria,
-  Ingrediente,
   LugarOrigen,
   Motivo,
   Pelaje,
@@ -33,13 +33,14 @@ import {
 import {
   Dieta,
   DietaVersion,
-  DietaVersionIngrediente,
+  DietaVersionInsumo,
 } from "./entities/dieta.entity";
 import { Alimentacion } from "./entities/alimentacion.entity";
 import { AlimentacionLote } from "./entities/alimentacion-lote.entity";
 import { Salida } from "./entities/salida.entity";
 import { SalidaAnimal } from "./entities/salida-animal.entity";
 import { LoteCorralAsignacion } from "./entities/lote-corral-asignacion.entity";
+import { CategoriaInsumo, Insumo } from "./entities/insumo.entity";
 
 @Module({
   imports: [
@@ -70,15 +71,16 @@ import { LoteCorralAsignacion } from "./entities/lote-corral-asignacion.entity";
           Proveedor,
           LugarOrigen,
           Motivo,
-          Ingrediente,
           Dieta,
           DietaVersion,
-          DietaVersionIngrediente,
+          DietaVersionInsumo,
           Alimentacion,
           AlimentacionLote,
           Salida,
           SalidaAnimal,
           LoteCorralAsignacion,
+          Insumo,
+          CategoriaInsumo,
         ],
         synchronize: false, // Migraciones manuales
         logging: true,
@@ -96,6 +98,7 @@ import { LoteCorralAsignacion } from "./entities/lote-corral-asignacion.entity";
     DietasModule,
     AlimentacionModule,
     SalidasModule,
+    InsumosModule,
   ],
 })
 export class AppModule {}

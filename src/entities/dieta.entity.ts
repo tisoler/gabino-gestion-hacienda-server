@@ -9,7 +9,7 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { Empresa } from "./empresa.entity";
-import { Ingrediente } from "./catalogo.entity";
+import { Insumo } from "./insumo.entity";
 
 /**
  * Dieta (lógica) de una empresa, identificada por `nombre`. `idEmpresa` NULL =
@@ -69,8 +69,8 @@ export class DietaVersion {
   @Column({ default: true })
   activa: boolean;
 
-  @OneToMany(() => DietaVersionIngrediente, (i) => i.version)
-  ingredientes: DietaVersionIngrediente[];
+  @OneToMany(() => DietaVersionInsumo, (i) => i.version)
+  insumos: DietaVersionInsumo[];
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
@@ -79,25 +79,28 @@ export class DietaVersion {
   updatedAt: Date;
 }
 
-/** Ingrediente + proporción (%) de una versión de dieta. Suma = 100. */
-@Entity("dieta_version_ingrediente")
-export class DietaVersionIngrediente {
+/**
+ * Insumo + proporción (%) de una versión de dieta. Suma = 100. El insumo debe
+ * tener categoría "Ingrediente dieta" (global o de la empresa de la dieta).
+ */
+@Entity("dieta_version_insumo")
+export class DietaVersionInsumo {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column({ name: "id_dieta_version" })
   idDietaVersion: number;
 
-  @ManyToOne(() => DietaVersion, (v) => v.ingredientes, { onDelete: "CASCADE" })
+  @ManyToOne(() => DietaVersion, (v) => v.insumos, { onDelete: "CASCADE" })
   @JoinColumn({ name: "id_dieta_version" })
   version: DietaVersion;
 
-  @Column({ name: "id_ingrediente" })
-  idIngrediente: number;
+  @Column({ name: "id_insumo" })
+  idInsumo: number;
 
-  @ManyToOne(() => Ingrediente)
-  @JoinColumn({ name: "id_ingrediente" })
-  ingrediente: Ingrediente;
+  @ManyToOne(() => Insumo)
+  @JoinColumn({ name: "id_insumo" })
+  insumo: Insumo;
 
   @Column({ type: "decimal", precision: 5, scale: 2 })
   porcentaje: number;

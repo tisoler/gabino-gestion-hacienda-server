@@ -8,7 +8,6 @@ import { Repository } from "typeorm";
 import {
   Categoria,
   CatalogoBase,
-  Ingrediente,
   LugarOrigen,
   Motivo,
   Pelaje,
@@ -63,7 +62,6 @@ export class CatalogosService {
     @InjectRepository(Proveedor) proveedor: Repository<Proveedor>,
     @InjectRepository(LugarOrigen) lugarOrigen: Repository<LugarOrigen>,
     @InjectRepository(Motivo) motivo: Repository<Motivo>,
-    @InjectRepository(Ingrediente) ingrediente: Repository<Ingrediente>,
     @InjectRepository(Empresa)
     private empresaRepository: Repository<Empresa>,
   ) {
@@ -74,7 +72,6 @@ export class CatalogosService {
       proveedor: proveedor as unknown as Repository<CatalogoBase>,
       lugar_origen: lugarOrigen as unknown as Repository<CatalogoBase>,
       motivo: motivo as unknown as Repository<CatalogoBase>,
-      ingrediente: ingrediente as unknown as Repository<CatalogoBase>,
     };
   }
 

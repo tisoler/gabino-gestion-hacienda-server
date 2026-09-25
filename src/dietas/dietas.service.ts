@@ -9,16 +9,15 @@ import { IsNull, Repository } from "typeorm";
 import {
   Dieta,
   DietaVersion,
-  DietaVersionIngrediente,
+  DietaVersionInsumo,
 } from "../entities/dieta.entity";
-import { Ingrediente } from "../entities/catalogo.entity";
+import { CategoriaInsumo, Insumo } from "../entities/insumo.entity";
 import { Roles } from "src/constantes";
 import { capitalizarNombre } from "../utils/nombres.util";
-import { CatalogosService } from "../catalogos/catalogos.service";
 import { CreateDietaDto } from "./dto/create-dieta.dto";
 
-export interface IngredienteView {
-  idIngrediente: number;
+export interface InsumoView {
+  idInsumo: number;
   nombre: string;
   porcentaje: number;
 }
@@ -32,11 +31,17 @@ export interface DietaView {
   activa: boolean;
   version: number;
   actualizadaEn: Date | null;
-  ingredientes: IngredienteView[];
+  insumos: InsumoView[];
 }
 
 const SUMA_TARGET = 100;
 const TOLERANCIA = 0.01;
+
+/** Categoría que habilita a un insumo a componer dietas (global id 1). */
+const CATEGORIA_DIETA = "ingrediente dieta";
+
+const SUMA_MSG = (suma: number) =>
+  `Las proporciones deben sumar 100% (suman ${Math.round(suma * 100) / 100}%)`;
 
 @Injectable()
 export class DietasService {
@@ -45,11 +50,12 @@ export class DietasService {
     private dietaRepository: Repository<Dieta>,
     @InjectRepository(DietaVersion)
     private versionRepository: Repository<DietaVersion>,
-    @InjectRepository(DietaVersionIngrediente)
-    private ingredienteRepository: Repository<DietaVersionIngrediente>,
-    @InjectRepository(Ingrediente)
-    private ingCatalogoRepository: Repository<Ingrediente>,
-    private catalogos: CatalogosService,
+    @InjectRepository(DietaVersionInsumo)
+    private insumoRepository: Repository<DietaVersionInsumo>,
+    @InjectRepository(Insumo)
+    private insumoCatalogoRepository: Repository<Insumo>,
+    @InjectRepository(CategoriaInsumo)
+    private categoriaRepository: Repository<CategoriaInsumo>,
   ) {}
 
   private empresaActual(user: any): number | null {
@@ -77,8 +83,8 @@ export class DietasService {
     const qb = this.dietaRepository
       .createQueryBuilder("d")
       .leftJoinAndSelect("d.versiones", "v")
-      .leftJoinAndSelect("v.ingredientes", "i")
-      .leftJoinAndSelect("i.ingrediente", "ing")
+      .leftJoinAndSelect("v.insumos", "i")
+      .leftJoinAndSelect("i.insumo", "ins")
       .where("d.id_empresa IS NULL OR d.id_empresa = :e", { e: empresaId });
     if (!verTodas) qb.andWhere("d.activa = true");
     const dietas = await qb
@@ -93,7 +99,7 @@ export class DietasService {
     const dieta = await this.getDietaVerificado(id, user);
     const versiones = await this.versionRepository.find({
       where: { idDieta: dieta.id },
-      relations: ["ingredientes", "ingredientes.ingrediente"],
+      relations: ["insumos", "insumos.insumo"],
       order: { version: "DESC" },
     });
     return versiones.map((v) => this.versionToView(dieta, v));
@@ -103,7 +109,10 @@ export class DietasService {
    * Crea una dieta o una nueva versión (mismo alcance + nombre). No se edita:
    * versionar desactiva la versión anterior (queda histórico). El sys-admin
    * puede crear para GLOBAL (`idEmpresa` null) o para una empresa; el resto,
-   * sólo para la suya. Valida suma 100 e ingredientes del catálogo.
+   * sólo para la suya. Valida suma 100 e insumos con categoría "Ingrediente
+   * dieta" (global o de la empresa). Los insumos nuevos (`nombre`) se crean
+   * con esa categoría y el alcance de la dieta ("crear vía dieta", sin exigir
+   * escritura:insumo).
    */
   async crear(dto: CreateDietaDto, user: any): Promise<DietaView> {
     const empresaActual = this.empresaActual(user);
@@ -124,56 +133,43 @@ export class DietasService {
     if (!nombre)
       throw new BadRequestException("El nombre de la dieta es obligatorio");
 
-    // Resolver ingredientes: existentes (validados contra el alcance) o nuevos
-    // (se crean en el alcance de la dieta: global → global, empresa → suya).
-    // Se hace ANTES de la transacción: son datos de catálogo idempotentes.
-    const resueltos: { idIngrediente: number; porcentaje: number }[] = [];
+    // Resolver insumos: existentes (validados contra el alcance) o nuevos
+    // (se crean con la categoría de dieta y el alcance final). Se hace ANTES
+    // de la transacción: son datos idempotentes.
+    const resueltos: { idInsumo: number; porcentaje: number }[] = [];
     const vistos = new Set<number>();
     let suma = 0;
-    for (const ing of dto.ingredientes) {
-      let idIng: number;
-      if (ing.idIngrediente != null) {
-        idIng = ing.idIngrediente;
-        await this.validarIngrediente(idIng, idEmpresa);
-      } else if (ing.nombre) {
-        const nom = capitalizarNombre(ing.nombre);
-        if (!nom) {
-          throw new BadRequestException("Nombre de ingrediente vacío");
-        }
-        const creado = await this.catalogos.buscarOcrear(
-          "ingrediente",
-          nom,
-          idEmpresa,
-        );
-        idIng = creado.id;
+    for (const item of dto.insumos) {
+      let idIns: number;
+      if (item.idInsumo != null) {
+        idIns = item.idInsumo;
+        await this.validarInsumo(idIns, idEmpresa);
+      } else if (item.nombre) {
+        idIns = await this.crearInsumoDieta(item, idEmpresa);
       } else {
         throw new BadRequestException(
-          "Cada ingrediente necesita un id existente o un nombre nuevo",
+          "Cada insumo necesita un id existente o un nombre nuevo",
         );
       }
-      if (vistos.has(idIng)) {
-        throw new BadRequestException(
-          "Hay ingredientes duplicados en la dieta",
-        );
+      if (vistos.has(idIns)) {
+        throw new BadRequestException("Hay insumos duplicados en la dieta");
       }
-      vistos.add(idIng);
-      suma += Number(ing.porcentaje);
+      vistos.add(idIns);
+      suma += Number(item.porcentaje);
       resueltos.push({
-        idIngrediente: idIng,
-        porcentaje: Number(ing.porcentaje),
+        idInsumo: idIns,
+        porcentaje: Number(item.porcentaje),
       });
     }
     if (Math.abs(suma - SUMA_TARGET) > TOLERANCIA) {
-      throw new BadRequestException(
-        `Las proporciones deben sumar 100% (suman ${Math.round(suma * 100) / 100}%)`,
-      );
+      throw new BadRequestException(SUMA_MSG(suma));
     }
 
     const idDieta = await this.dietaRepository.manager.transaction(
       async (em) => {
         const dietaRepo = em.getRepository(Dieta);
         const versionRepo = em.getRepository(DietaVersion);
-        const ingRepo = em.getRepository(DietaVersionIngrediente);
+        const insRepo = em.getRepository(DietaVersionInsumo);
 
         let dieta = await dietaRepo.findOne({
           where: { idEmpresa: idEmpresa ?? IsNull(), nombre },
@@ -207,11 +203,11 @@ export class DietasService {
             activa: true,
           }),
         );
-        await ingRepo.save(
+        await insRepo.save(
           resueltos.map((i) =>
-            ingRepo.create({
+            insRepo.create({
               idDietaVersion: version.id,
-              idIngrediente: i.idIngrediente,
+              idInsumo: i.idInsumo,
               porcentaje: i.porcentaje,
             }),
           ),
@@ -261,29 +257,140 @@ export class DietasService {
   }
 
   /**
-   * Valida un ingrediente según el alcance de la dieta: para una dieta GLOBAL
-   * (idEmpresa null) exige que el ingrediente sea global; para una empresa, que
-   * sea global o de esa empresa.
+   * Valida un insumo según el alcance de la dieta: debe tener categoría
+   * "Ingrediente dieta" (global o de la empresa) y, para una dieta GLOBAL,
+   * el insumo también debe ser global; para una empresa, global o de ella.
    */
-  private async validarIngrediente(id: number, idEmpresa: number | null) {
-    const ing = await this.ingCatalogoRepository.findOne({ where: { id } });
-    if (!ing || (ing.idEmpresa != null && ing.idEmpresa !== idEmpresa)) {
+  private async validarInsumo(id: number, idEmpresa: number | null) {
+    const ins = await this.insumoCatalogoRepository.findOne({
+      where: { id },
+      relations: ["categoria"],
+    });
+    if (!ins) {
+      throw new BadRequestException("El insumo seleccionado no existe");
+    }
+    const cat = ins.categoria;
+    const catApta =
+      cat != null &&
+      cat.nombre.toLowerCase() === CATEGORIA_DIETA &&
+      (idEmpresa == null
+        ? cat.idEmpresa == null
+        : cat.idEmpresa == null || cat.idEmpresa === idEmpresa);
+    if (!catApta) {
       throw new BadRequestException(
         idEmpresa == null
-          ? "Una dieta global sólo admite ingredientes globales"
-          : "El ingrediente seleccionado no está disponible",
+          ? "Una dieta global sólo admite insumos globales con categoría Ingrediente dieta"
+          : "El insumo seleccionado no está disponible (debe tener categoría Ingrediente dieta)",
       );
     }
+    if (
+      idEmpresa == null
+        ? ins.idEmpresa != null
+        : ins.idEmpresa != null && ins.idEmpresa !== idEmpresa
+    ) {
+      throw new BadRequestException(
+        idEmpresa == null
+          ? "Una dieta global sólo admite insumos globales"
+          : "El insumo seleccionado no está disponible",
+      );
+    }
+  }
+
+  /**
+   * Crea el insumo de un item nuevo (`nombre`) con la categoría de dieta y el
+   * alcance de la dieta ("crear vía dieta"). Si ya existe un insumo con ese
+   * nombre en el alcance, lo reutiliza (validando que sea apto).
+   */
+  private async crearInsumoDieta(
+    item: {
+      nombre?: string;
+      descripcion?: string | null;
+      precioReferencia?: number | null;
+      unidad?: string;
+    },
+    idEmpresa: number | null,
+  ): Promise<number> {
+    const nombre = capitalizarNombre(item.nombre ?? "");
+    if (!nombre) {
+      throw new BadRequestException("Nombre de insumo vacío");
+    }
+    const existente = await this.insumoCatalogoRepository.findOne({
+      where: { idEmpresa: idEmpresa ?? IsNull(), nombre },
+      relations: ["categoria"],
+    });
+    if (existente) {
+      await this.validarInsumo(existente.id, idEmpresa);
+      return existente.id;
+    }
+    const idCategoria = await this.resolverCategoriaDieta(idEmpresa);
+    try {
+      const creado = await this.insumoCatalogoRepository.save(
+        this.insumoCatalogoRepository.create({
+          nombre,
+          descripcion: item.descripcion?.trim() || null,
+          idCategoria,
+          idEmpresa,
+          precioReferencia: item.precioReferencia ?? null,
+          unidad: item.unidad || null,
+          activo: true,
+        }),
+      );
+      return creado.id;
+    } catch (e: any) {
+      // Carrera: otro request creó el mismo nombre; se reutiliza si es apto.
+      if (e?.code === "23505") {
+        const otro = await this.insumoCatalogoRepository.findOne({
+          where: { idEmpresa: idEmpresa ?? IsNull(), nombre },
+        });
+        if (otro) {
+          await this.validarInsumo(otro.id, idEmpresa);
+          return otro.id;
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Categoría "Ingrediente dieta" para el alcance (prefiere la de la empresa;
+   * si no existe la crea — red de seguridad, el seed la deja global).
+   */
+  private async resolverCategoriaDieta(
+    idEmpresa: number | null,
+  ): Promise<number> {
+    if (idEmpresa != null) {
+      const propia = await this.categoriaRepository.findOne({
+        where: { idEmpresa, nombre: "Ingrediente dieta" },
+      });
+      // Búsqueda case-insensitive por si difiere capitalización histórica.
+      const propiaCi =
+        propia ??
+        (await this.categoriaRepository
+          .createQueryBuilder("c")
+          .where("c.id_empresa = :e", { e: idEmpresa })
+          .andWhere("LOWER(c.nombre) = :n", { n: CATEGORIA_DIETA })
+          .getOne());
+      if (propiaCi) return propiaCi.id;
+    }
+    const global = await this.categoriaRepository
+      .createQueryBuilder("c")
+      .where("c.id_empresa IS NULL")
+      .andWhere("LOWER(c.nombre) = :n", { n: CATEGORIA_DIETA })
+      .getOne();
+    if (global) return global.id;
+    const creada = await this.categoriaRepository.save(
+      this.categoriaRepository.create({
+        nombre: "Ingrediente dieta",
+        idEmpresa,
+      }),
+    );
+    return creada.id;
   }
 
   private async obtenerDetalle(id: number, user: any): Promise<DietaView> {
     const dieta = await this.dietaRepository.findOne({
       where: { id },
-      relations: [
-        "versiones",
-        "versiones.ingredientes",
-        "versiones.ingredientes.ingrediente",
-      ],
+      relations: ["versiones", "versiones.insumos", "versiones.insumos.insumo"],
     });
     if (!dieta) throw new NotFoundException("Dieta no encontrada");
     void user;
@@ -304,7 +411,7 @@ export class DietasService {
       activa: dieta.activa,
       version: vigente?.version ?? 0,
       actualizadaEn: vigente?.createdAt ?? null,
-      ingredientes: this.ingredientes(vigente),
+      insumos: this.insumos(vigente),
     };
   }
 
@@ -317,17 +424,17 @@ export class DietasService {
       activa: dieta.activa,
       version: version.version,
       actualizadaEn: version.createdAt ?? null,
-      ingredientes: this.ingredientes(version),
+      insumos: this.insumos(version),
     };
   }
 
-  private ingredientes(version?: DietaVersion): IngredienteView[] {
-    const lista = version?.ingredientes ?? [];
+  private insumos(version?: DietaVersion): InsumoView[] {
+    const lista = version?.insumos ?? [];
     return [...lista]
       .sort((a, b) => Number(b.porcentaje) - Number(a.porcentaje))
       .map((i) => ({
-        idIngrediente: i.idIngrediente,
-        nombre: i.ingrediente?.nombre ?? "",
+        idInsumo: i.idInsumo,
+        nombre: i.insumo?.nombre ?? "",
         porcentaje: Number(i.porcentaje),
       }));
   }

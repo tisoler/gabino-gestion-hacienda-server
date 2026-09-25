@@ -16,7 +16,6 @@ export const CATALOGO_TIPOS = [
   "proveedor",
   "lugar_origen",
   "motivo",
-  "ingrediente",
 ] as const;
 export type CatalogoTipo = (typeof CATALOGO_TIPOS)[number];
 

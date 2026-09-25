@@ -3,22 +3,21 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import {
   Dieta,
   DietaVersion,
-  DietaVersionIngrediente,
+  DietaVersionInsumo,
 } from "../entities/dieta.entity";
-import { Ingrediente } from "../entities/catalogo.entity";
+import { CategoriaInsumo, Insumo } from "../entities/insumo.entity";
 import { DietasService } from "./dietas.service";
 import { DietasController } from "./dietas.controller";
-import { CatalogosModule } from "../catalogos/catalogos.module";
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Dieta,
       DietaVersion,
-      DietaVersionIngrediente,
-      Ingrediente,
+      DietaVersionInsumo,
+      Insumo,
+      CategoriaInsumo,
     ]),
-    CatalogosModule,
   ],
   providers: [DietasService],
   controllers: [DietasController],
