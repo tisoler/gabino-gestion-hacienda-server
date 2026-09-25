@@ -200,6 +200,10 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   reconstrucción (por lote: común/enfermería) para precargar el modal. El alta acepta un
   `ajuste: [{loteId, nAnimales, nAnimalesEnfermeria}]` opcional por fila que **reemplaza** la
   reconstrucción (override editable del usuario). Base del reporte de costo. Ver DESIGN.
+  `DELETE /alimentaciones/:id` (`escritura:alimento`) elimina el evento en forma
+  FÍSICA (con su reparto por lote), sólo si NO está `liquidada` (una liquidada es
+  inmutable para el futuro módulo de liquidaciones). Migración
+  `019-alimentacion-liquidada.sql`.
 - **salidas** (egreso/entrega de animales + histórico): `POST /lotes/:id/salidas`
   (`escritura:salida`) con `{ fecha, hora?, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
   [{animalId, pesoFinal?, desbaste?}] }` (hora default 12:00). Salen animales VIVOS (sano/enfermo);

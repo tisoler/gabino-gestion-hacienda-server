@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -122,5 +123,20 @@ export class AlimentacionController {
     @Request() req,
   ): Promise<AlimentacionView> {
     return this.service.editar(id, dto, req.user);
+  }
+
+  @Delete(":id")
+  @Permissions("escritura:alimento")
+  @ApiOperation({
+    summary: "Eliminar una alimentación (borrado físico)",
+    description:
+      "Sólo si NO está liquidada; una liquidada es inmutable para el futuro módulo de liquidaciones.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID de la alimentación" })
+  eliminar(
+    @Param("id", ParseIntPipe) id: number,
+    @Request() req,
+  ): Promise<void> {
+    return this.service.eliminar(id, req.user);
   }
 }

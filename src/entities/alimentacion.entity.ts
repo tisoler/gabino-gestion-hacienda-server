@@ -97,6 +97,13 @@ export class Alimentacion {
   @Column({ name: "id_usuario", type: "varchar", length: 128, nullable: true })
   idUsuario: string | null;
 
+  /**
+   * Si el evento ya fue liquidado (etapa posterior: liquidaciones).
+   * Liquidada = NO se puede eliminar (borrado físico sólo si no lo está).
+   */
+  @Column({ default: false })
+  liquidada: boolean;
+
   @OneToMany(() => AlimentacionLote, (l) => l.alimentacion)
   lotes: AlimentacionLote[];
 

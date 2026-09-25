@@ -1,6 +1,7 @@
 import { Type } from "class-transformer";
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsInt,
   IsNumber,
@@ -38,4 +39,12 @@ export class ActualizarAlimentacionDto {
   @ValidateNested({ each: true })
   @Type(() => AjusteLoteDto)
   ajuste?: AjusteLoteDto[];
+
+  /**
+   * Marca de liquidada (la setea el futuro módulo de liquidaciones). Sin UI
+   * por ahora; una liquidada no se puede eliminar.
+   */
+  @IsOptional()
+  @IsBoolean()
+  liquidada?: boolean;
 }

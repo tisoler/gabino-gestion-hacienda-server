@@ -52,6 +52,8 @@ export interface AlimentacionView {
   fecha: string;
   /** Hora de la alimentación 'HH:MM:SS' (default 12:00). */
   hora: string;
+  /** Si el evento ya fue liquidado (no se puede eliminar). */
+  liquidada: boolean;
   /** Total (corral + enfermería). */
   cantidadKg: number;
   /** Lo ingresado para el corral. */
@@ -346,6 +348,7 @@ export class AlimentacionService {
       await alLoteRepo.delete({ idAlimentacion: al.id });
       al.fecha = fecha;
       al.hora = hora;
+      if (dto.liquidada !== undefined) al.liquidada = dto.liquidada;
       al.idDieta = idDieta;
       al.idDietaVersion = idDietaVersion;
       al.cantidadCorralKg = redondear(cantidadKg, 2);
@@ -374,6 +377,37 @@ export class AlimentacionService {
     });
 
     return this.obtenerDetalle(al.id);
+  }
+
+  /**
+   * Elimina una alimentación (borrado FÍSICO: volver a ingresarla es fácil).
+   * Sólo si NO está liquidada; una liquidada es inmutable para el futuro
+   * módulo de liquidaciones.
+   */
+  async eliminar(id: number, user: any): Promise<void> {
+    const al = await this.alimentacionRepository.findOne({ where: { id } });
+    if (!al) throw new NotFoundException("Alimentación no encontrada");
+    if (!this.esSysAdmin(user)) {
+      const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
+        Number(e),
+      );
+      if (!userEmpresas.includes(al.idEmpresa)) {
+        throw new ForbiddenException(
+          "No tiene permisos sobre esta alimentación",
+        );
+      }
+    }
+    if (al.liquidada) {
+      throw new BadRequestException(
+        "No se puede eliminar una alimentación liquidada",
+      );
+    }
+    await this.alimentacionRepository.manager.transaction(async (em) => {
+      await em
+        .getRepository(AlimentacionLote)
+        .delete({ idAlimentacion: al.id });
+      await em.getRepository(Alimentacion).delete(al.id);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -772,6 +806,7 @@ export class AlimentacionService {
       id: a.id,
       fecha: this.fechaIso(a.fecha),
       hora: a.hora ?? "12:00:00",
+      liquidada: a.liquidada ?? false,
       cantidadKg: Number(a.cantidadKg),
       cantidadCorralKg: Number(a.cantidadCorralKg),
       cantidadEnfermeriaKg: Number(a.cantidadEnfermeriaKg),

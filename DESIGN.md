@@ -126,8 +126,10 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   **extra** a la misma tasa (porque allí se alimenta junto a animales de otros corrales/lotes):
   se SUMAN al total, no se reparten del corral. Queda desglosado: `cantidad_corral_kg`
   (ingresada) + `cantidad_enfermeria_kg` = `cantidad_kg`; `n_animales` + `n_animales_enfermeria`;
-  y por lote en `alimentacion_lote` (`n_animales`, `cantidad_kg`, `n_animales_enfermeria`,
-  `cantidad_enfermeria_kg`). Permisos `lectura:alimento` / `escritura:alimento`. Base del
+   y por lote en `alimentacion_lote` (`n_animales`, `cantidad_kg`, `n_animales_enfermeria`,
+   `cantidad_enfermeria_kg`). `liquidada` (default false, migración 019): si está liquidada
+   no se puede eliminar (borrado físico sólo si no lo está; base del futuro módulo de
+   liquidaciones). Permisos `lectura:alimento` / `escritura:alimento`. Base del
   reporte de costo.
 - **Salidas de animales** — `salida` (evento: lote + corral al momento de la salida + fecha +
   tipo 'lote'|'partida'|'animales' + n + totales) → `salida_animal` (snapshot por animal:
