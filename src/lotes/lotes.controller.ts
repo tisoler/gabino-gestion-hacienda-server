@@ -63,6 +63,18 @@ export class LotesController {
     return this.lotesService.findAll(req.user, currentEmpresaId);
   }
 
+  @Get("balances")
+  @Permissions("lectura:balance-lote")
+  @ApiOperation({
+    summary: "Resumen de balances por lote visible (totales)",
+    description:
+      "Un renglón por lote accesible (empresa actual + aislamiento de " +
+      "cliente): totales total / liquidado / pendiente.",
+  })
+  getBalances(@Request() req) {
+    return this.lotesService.getBalancesResumen(req.user);
+  }
+
   @Get(":id")
   @Permissions("lectura:lote")
   @ApiOperation({
@@ -219,6 +231,20 @@ export class LotesController {
     @Request() req,
   ) {
     return this.lotesService.getMovimientos(id, animalId, req.user);
+  }
+
+  @Get(":id/balance")
+  @Permissions("lectura:balance-lote")
+  @ApiOperation({
+    summary: "Balance económico del lote (costos registrados)",
+    description:
+      "Alimentaciones con su costo a precios de referencia + tratamientos " +
+      "veterinarios con sus precios aplicados, y totales (total / liquidado / " +
+      "pendiente). Las aplicaciones al lote van en un solo registro.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  getBalance(@Param("id", ParseIntPipe) id: number, @Request() req) {
+    return this.lotesService.getBalance(id, req.user);
   }
 
   @Post(":id/salidas")

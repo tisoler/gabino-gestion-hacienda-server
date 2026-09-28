@@ -166,33 +166,106 @@ export class AlimentacionService {
       throw new BadRequestException("Cargá al menos una fila de alimentación");
     }
     const corral = await this.validarCorralAlimentar(dto.idCorral, empresaId);
-    const creadas = await this.alimentacionRepository.manager.transaction(
-      async (em) => {
-        const alRepo = em.getRepository(Alimentacion);
-        const alLoteRepo = em.getRepository(AlimentacionLote);
-        let n = 0;
-        for (const fila of dto.filas) {
-          const { dieta, version } = await this.validarDieta(
-            fila.idDieta,
-            empresaId,
-          );
-          await this.crearFila(em, alRepo, alLoteRepo, {
-            empresaId,
-            corral,
-            dieta,
-            version,
-            fechaStr: fila.fecha,
-            horaStr: fila.hora,
-            cantidadKg: Number(fila.cantidadKg),
-            ajuste: fila.ajuste,
-            idUsuario: user?.id ?? null,
+    // Cache por request: la dieta se valida una vez por id y el reparto una
+    // vez por instante (fecha+hora+cantidad+ajuste). Las filas nuevas heredan
+    // fecha/hora, así que lo normal es UN instante para todas.
+    const dietaCache = new Map<
+      number,
+      { dieta: Dieta; version: DietaVersion }
+    >();
+    const repartoCache = new Map<
+      string,
+      {
+        fecha: Date;
+        hora: string;
+        reparto: RepartoRow[];
+        tasas: ReturnType<AlimentacionService["calcularTasas"]>;
+      }
+    >();
+    const preparadas: {
+      dieta: Dieta;
+      version: DietaVersion;
+      fecha: Date;
+      hora: string;
+      cantidadKg: number;
+      reparto: RepartoRow[];
+      tasas: ReturnType<AlimentacionService["calcularTasas"]>;
+    }[] = [];
+    for (const fila of dto.filas) {
+      let dv = dietaCache.get(fila.idDieta);
+      if (!dv) {
+        dv = await this.validarDieta(fila.idDieta, empresaId);
+        dietaCache.set(fila.idDieta, dv);
+      }
+      const cantidadKg = Number(fila.cantidadKg);
+      const clave =
+        `${fila.fecha}|${fila.hora ?? "12:00"}|${cantidadKg}|` +
+        (fila.ajuste?.length ? JSON.stringify(fila.ajuste) : "");
+      let r = repartoCache.get(clave);
+      if (!r) {
+        r = await this.resolverReparto(
+          empresaId,
+          corral.id,
+          fila.fecha,
+          fila.hora,
+          cantidadKg,
+          fila.ajuste,
+        );
+        repartoCache.set(clave, r);
+      }
+      preparadas.push({
+        dieta: dv.dieta,
+        version: dv.version,
+        cantidadKg,
+        ...r,
+      });
+    }
+    // Bulk en transacción: UN insert multi-fila por tabla (los timestamps los
+    // pone la BD por DEFAULT). Atómico como antes, sin N rondas.
+    const idUsuario = user?.id ?? null;
+    await this.alimentacionRepository.manager.transaction(async (em) => {
+      const alRepo = em.getRepository(Alimentacion);
+      const alLoteRepo = em.getRepository(AlimentacionLote);
+      const resAl = await alRepo.insert(
+        preparadas.map((p) => ({
+          idEmpresa: empresaId,
+          idCorral: corral.id,
+          idDieta: p.dieta.id,
+          idDietaVersion: p.version.id,
+          fecha: p.fecha,
+          hora: p.hora,
+          cantidadKg: redondear(p.tasas.cantidadTotal, 2),
+          cantidadCorralKg: p.cantidadKg,
+          cantidadEnfermeriaKg: redondear(p.tasas.cantidadEnfermeria, 2),
+          cantidadPorAnimal: redondear(p.tasas.rate, 4),
+          nAnimales: p.tasas.totalNCorral,
+          nAnimalesEnfermeria: p.tasas.totalNEnfermeria,
+          idUsuario,
+        })),
+      );
+      const ids: number[] = resAl.identifiers.map((o: any) => o.id);
+      const filasLote: object[] = [];
+      preparadas.forEach((p, idx) => {
+        for (const r of p.reparto) {
+          filasLote.push({
+            idAlimentacion: ids[idx],
+            idLote: r.loteId,
+            idCliente: r.idCliente,
+            nAnimales: r.nAnimales,
+            cantidadKg: redondear(p.tasas.rate * r.nAnimales, 2),
+            nAnimalesEnfermeria: r.nAnimalesEnfermeria,
+            cantidadEnfermeriaKg: redondear(
+              p.tasas.rate * r.nAnimalesEnfermeria,
+              2,
+            ),
           });
-          n += 1;
         }
-        return n;
-      },
-    );
-    return { creadas };
+      });
+      if (filasLote.length > 0) {
+        await alLoteRepo.insert(filasLote);
+      }
+    });
+    return { creadas: preparadas.length };
   }
 
   /** Crea una alimentación (una fila) reconstruyendo el corral al instante T. */

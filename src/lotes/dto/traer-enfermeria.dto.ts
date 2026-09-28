@@ -1,4 +1,6 @@
+import { Type } from "class-transformer";
 import {
+  IsArray,
   IsDateString,
   IsIn,
   IsInt,
@@ -7,7 +9,9 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from "class-validator";
+import { TratamientoAplicadoItemDto } from "../../veterinaria/dto/aplicar-tratamiento.dto";
 
 /**
  * Traer un animal de enfermería: el usuario elige el estado de salida
@@ -36,4 +40,15 @@ export class TraerEnfermeriaDto {
   @IsInt()
   @Min(1)
   idMotivo?: number;
+
+  /**
+   * Tratamientos del alta (opcional; requiere escritura:veterinaria): los
+   * `id` existentes se actualizan (conservan su fecha/hora) y los nuevos se
+   * crean con el instante de este movimiento.
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TratamientoAplicadoItemDto)
+  tratamientos?: TratamientoAplicadoItemDto[];
 }

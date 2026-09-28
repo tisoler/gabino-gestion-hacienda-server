@@ -112,7 +112,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   cantidad + caravanas; la partida la decide el server y el peso inicial se carga en Pesajes) ·
   `POST /lotes/:id/animales/edicion-masiva` (raza/categoría/pelaje por animal del lote o de
   una partida: `{ alcance, idPartida?, valores: [{animalId, idRaza?, idCategoria?, idPelaje?}] }`
-  con campo ausente = no cambia, `null` = limpia, número = setea; catálogos validados) ·
+  con campo ausente = no cambia, `null` = limpia, número = setea; catálogos validados;
+  bulk por cambio idéntico (un UPDATE por grupo) en transacción) ·
   `PATCH /lotes/:id/animales/:animalId` (incluye `estado` + `idMotivo`/`motivo` para el
   historial) · `DELETE /lotes/:id/animales/:animalId` ·
   `POST /lotes/:id/animales/:animalId/enfermeria` (motivo obligatorio → estado 'enfermo') ·
@@ -184,7 +185,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 - **alimentacion** (alimentar corrales + histórico): `POST /alimentaciones` (`escritura:alimento`)
   con `{ idCorral, idDieta, cantidadKg, fecha, hora? }` (una fila) y
   `POST /alimentaciones/masiva` con `{ idCorral, filas: [{ idDieta, cantidadKg, fecha, hora? }] }`
-  (varias filas, mismo corral, en una transacción) — sólo corrales COMUNES (las enfermerías se
+  (varias filas, mismo corral, en una transacción; dieta y reparto cacheados por
+  instante + bulk inserts por tabla) — sólo corrales COMUNES (las enfermerías se
   alimentan a través del corral de su lote). Cada fila tiene **instante T = fecha + hora**
   (default 12:00). La `cantidadKg` es la del CORRAL y se reparte por fila. **Los animales del
   corral se RECONSTRUYEN al instante T** (`estadoCorralEn`): lotes del corral en T vía
@@ -218,6 +220,24 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `PATCH /salidas/:id` (`escritura:salida`) edita `fecha`+`hora`. Aplica la migración
   `016-salida-corral-snapshot.sql`; las salidas previas quedan con `id_corral` NULL hasta
   completarlas. Ver el modelo en DESIGN.
+- **veterinaria** (tratamientos e insumos): catálogo `tratamiento` (`GET /tratamientos`,
+  `POST`, `PATCH /:id`, `PATCH /:id/activo`, `lectura:veterinaria` / `escritura:veterinaria`,
+  sin categorías) + aplicaciones a animales (`tratamiento_aplicado` con `id_movimiento`
+  opcional, `fecha`+`hora` y `alcance` 'animal'|'lote' + `tratamiento_aplicado_insumo` con
+  precio aplicado):   `POST /tratamientos/aplicar` (directo, sin movimiento),
+  `POST /lotes/:id/tratamientos` (masivo al lote: cabecera `tratamiento_aplicado_lote` +
+  bulk en transacción — un insert multi-fila por tabla),
+  `GET /lotes/:id/animales/:animalId/tratamientos/abiertos` (los del último envío, para el
+  alta) y `GET .../historial` (movimientos con resumen de tratamientos sin insumos +
+  tratamientos directos/masivos, cronológico DESC). Los movimientos a/desde enfermería
+  aceptan `tratamientos` opcionales (requieren `escritura:veterinaria`): cada item es un
+  `idTratamiento`/`idInsumo` existente o un `nombre` nuevo (con descripción/precio/unidad)
+  que el server crea con la empresa del lote — insumos siempre con categoría Veterinaria,
+  sin pedir escritura:insumo (igual que en dietas). Migración `020-veterinaria.sql`.
+  Ver el modelo en DESIGN.
+- **balance** (en `lotes`): `GET /lotes/:id/balance` (`lectura:balance-lote`) con costos
+  (alimentaciones a precios de referencia + tratamientos a precios aplicados; masivos al
+  lote en un registro con sus animales) y totales total/liquidado/pendiente.
 - **insumos** (catálogo de insumos + categorías): `GET /insumos?estado=activas|todas&scope=todas|global|empresa&idEmpresa=`
   (`lectura:insumo`; `todas` requiere `escritura:insumo`; `idEmpresa` sólo sys-admin) con su
   categoría · `GET /insumos/categorias` (globales + empresa) · `POST /insumos`
@@ -240,8 +260,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 | Rol | Permisos |
 |---|---|
 | `sys-admin` | todos |
-| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo` |
-| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo` |
+| `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote`, `escritura:balance-lote` |
+| `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
 
 `lectura:dieta` ve sólo dietas activas; `escritura:dieta` ve todas las versiones,
@@ -249,10 +269,13 @@ crea/versiona y activa/desactiva dietas enteras. `lectura:alimento` ve el histó
 alimentación; `escritura:alimento` registra alimentaciones. `lectura:salida` ve el histórico de
 salidas; `escritura:salida` da salida a animales. `lectura:insumo` ve el catálogo de
 insumos (sólo activos); `escritura:insumo` ve también los desactivados, crea/edita y
-activa/desactiva.
+activa/desactiva. `lectura:veterinaria` ve el catálogo de tratamientos (sólo activos);
+`escritura:veterinaria` gestiona el catálogo y aplica tratamientos (en movimientos,
+directos o al lote).
 
-**Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w` y
-`p_insumo_r` / `p_insumo_w` a los roles 1, 2 y 3 (además de los ya documentados
-`p_dieta_r/w` y `p_alimento_r/w`).
+**Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w`,
+`p_insumo_r` / `p_insumo_w`, `p_veterinaria_r` / `p_veterinaria_w` y
+`p_balance_lote_r` / `p_balance_lote_w` a los roles 1 y 2 (`p_balance_lote_r` también
+al 3; `escritura:balance-lote` reservada para futuras liquidaciones).
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

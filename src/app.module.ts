@@ -13,6 +13,7 @@ import { DietasModule } from "./dietas/dietas.module";
 import { AlimentacionModule } from "./alimentacion/alimentacion.module";
 import { SalidasModule } from "./salidas/salidas.module";
 import { InsumosModule } from "./insumos/insumos.module";
+import { VeterinariaModule } from "./veterinaria/veterinaria.module";
 
 import { Empresa } from "./entities/empresa.entity";
 import { EmpresaCliente } from "./entities/empresa-cliente.entity";
@@ -41,6 +42,12 @@ import { Salida } from "./entities/salida.entity";
 import { SalidaAnimal } from "./entities/salida-animal.entity";
 import { LoteCorralAsignacion } from "./entities/lote-corral-asignacion.entity";
 import { CategoriaInsumo, Insumo } from "./entities/insumo.entity";
+import {
+  Tratamiento,
+  TratamientoAplicado,
+  TratamientoAplicadoInsumo,
+  TratamientoAplicadoLote,
+} from "./entities/tratamiento.entity";
 
 @Module({
   imports: [
@@ -81,6 +88,10 @@ import { CategoriaInsumo, Insumo } from "./entities/insumo.entity";
           LoteCorralAsignacion,
           Insumo,
           CategoriaInsumo,
+          Tratamiento,
+          TratamientoAplicado,
+          TratamientoAplicadoInsumo,
+          TratamientoAplicadoLote,
         ],
         synchronize: false, // Migraciones manuales
         logging: true,
@@ -99,6 +110,7 @@ import { CategoriaInsumo, Insumo } from "./entities/insumo.entity";
     AlimentacionModule,
     SalidasModule,
     InsumosModule,
+    VeterinariaModule,
   ],
 })
 export class AppModule {}

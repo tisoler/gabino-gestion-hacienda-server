@@ -28,6 +28,15 @@ import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { CatalogosService } from "../catalogos/catalogos.service";
+import { TratamientosService } from "../veterinaria/veterinaria.service";
+import { TratamientoAplicadoItemDto } from "../veterinaria/dto/aplicar-tratamiento.dto";
+import { AlimentacionLote } from "../entities/alimentacion-lote.entity";
+import { DietaVersionInsumo } from "../entities/dieta.entity";
+import { Insumo } from "../entities/insumo.entity";
+import {
+  TratamientoAplicado,
+  TratamientoAplicadoLote,
+} from "../entities/tratamiento.entity";
 
 export interface LoteResumen {
   id: number;
@@ -49,6 +58,55 @@ export interface LoteResumen {
   createdAt: Date;
   updatedAt: Date;
   nAnimales: number;
+}
+
+export interface BalanceAlimentacionRow {
+  id: number;
+  fecha: string;
+  hora: string;
+  dietaNombre: string;
+  dietaVersion: number;
+  cantidadKg: number;
+  nAnimales: number;
+  /** Costo a precios de referencia (cantidad × costo $/kg de la versión). */
+  costo: number;
+  liquidada: boolean;
+}
+
+export interface BalanceTratamientoRow {
+  kind: "animal" | "lote";
+  /** id del aplicado (animal) o de la cabecera (lote). */
+  id: number;
+  fecha: string;
+  hora: string;
+  nombres: string[];
+  /** Sólo alcance animal. */
+  caravana?: string | null;
+  /** Sólo alcance lote. */
+  nAnimales?: number;
+  animales?: { id: number; caravana: string | null }[];
+  /** Suma de precios aplicados (tratamiento + insumos). */
+  costo: number;
+  liquidada: boolean;
+}
+
+export interface BalanceView {
+  alimentaciones: BalanceAlimentacionRow[];
+  tratamientos: BalanceTratamientoRow[];
+  totales: { total: number; liquidado: number; pendiente: number };
+}
+
+export interface BalanceLoteResumen {
+  idLote: number;
+  loteNombre: string;
+  idEmpresa: number;
+  nombreEmpresa: string | null;
+  idCliente: string | null;
+  clienteNombre: string | null;
+  nAnimales: number;
+  total: number;
+  liquidado: number;
+  pendiente: number;
 }
 
 @Injectable()
@@ -76,6 +134,17 @@ export class LotesService {
     private asignacionRepository: Repository<LoteCorralAsignacion>,
     private cache: FirestoreCacheService,
     private catalogos: CatalogosService,
+    private tratamientos: TratamientosService,
+    @InjectRepository(AlimentacionLote)
+    private alimentacionLoteRepository: Repository<AlimentacionLote>,
+    @InjectRepository(DietaVersionInsumo)
+    private dietaVersionInsumoRepository: Repository<DietaVersionInsumo>,
+    @InjectRepository(Insumo)
+    private insumoRepository: Repository<Insumo>,
+    @InjectRepository(TratamientoAplicado)
+    private tratamientoAplicadoRepository: Repository<TratamientoAplicado>,
+    @InjectRepository(TratamientoAplicadoLote)
+    private tratamientoAplicadoLoteRepository: Repository<TratamientoAplicadoLote>,
   ) {}
 
   /**
@@ -911,6 +980,7 @@ export class LotesService {
       idMotivo?: number;
       fecha?: string;
       hora?: string;
+      tratamientos?: TratamientoAplicadoItemDto[];
     },
     user: any,
   ): Promise<any> {
@@ -968,7 +1038,7 @@ export class LotesService {
     animal.estado = "enfermo";
     const saved = await this.animalRepository.save(animal);
 
-    await this.registrarMovimiento({
+    const mov = await this.registrarMovimiento({
       idAnimal: saved.id,
       idEmpresa: lote.idEmpresa,
       tipo: "a_enfermeria",
@@ -981,6 +1051,17 @@ export class LotesService {
       hora: dto.hora,
       user,
     });
+    if (dto.tratamientos && dto.tratamientos.length > 0) {
+      await this.tratamientos.crearParaMovimiento({
+        animalId: saved.id,
+        idMovimiento: mov.id,
+        fecha: mov.fecha,
+        hora: mov.hora,
+        items: dto.tratamientos,
+        empresaId: lote.idEmpresa,
+        user,
+      });
+    }
     return this.animalJson(saved);
   }
 
@@ -1021,7 +1102,7 @@ export class LotesService {
     animal.estado = dto.estado;
     const saved = await this.animalRepository.save(animal);
 
-    await this.registrarMovimiento({
+    const mov = await this.registrarMovimiento({
       idAnimal: saved.id,
       idEmpresa: lote.idEmpresa,
       tipo: "de_enfermeria",
@@ -1034,6 +1115,17 @@ export class LotesService {
       hora: dto.hora,
       user,
     });
+    if (dto.tratamientos && dto.tratamientos.length > 0) {
+      await this.tratamientos.actualizarParaMovimiento({
+        animalId: saved.id,
+        idMovimiento: mov.id,
+        fecha: mov.fecha,
+        hora: mov.hora,
+        registros: dto.tratamientos,
+        empresaId: lote.idEmpresa,
+        user,
+      });
+    }
     return this.animalJson(saved);
   }
 
@@ -1069,6 +1161,215 @@ export class LotesService {
       // Fecha+hora de NEGOCIO del movimiento (no `created_at`).
       fecha: this.momentoIso(m.fecha, m.hora),
     }));
+  }
+
+  /**
+   * Balance económico del lote: costos registrados (alimentaciones con su
+   * costo a precios de referencia + tratamientos/insumos veterinarios con
+   * sus precios aplicados) y totales (total / liquidado / pendiente).
+   * Las aplicaciones al lote van en UN registro (con sus animales).
+   */
+  async getBalance(idLote: number, user: any): Promise<BalanceView> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    // --- Alimentaciones que tocaron al lote (por reparto) ---
+    const filasAl = await this.alimentacionLoteRepository.find({
+      where: { idLote: lote.id },
+      relations: [
+        "alimentacion",
+        "alimentacion.dieta",
+        "alimentacion.dietaVersion",
+      ],
+    });
+    const porEvento = new Map<number, typeof filasAl>();
+    for (const f of filasAl) {
+      const lista = porEvento.get(f.idAlimentacion) ?? [];
+      lista.push(f);
+      porEvento.set(f.idAlimentacion, lista);
+    }
+    const versionIds = Array.from(
+      new Set(
+        filasAl
+          .map((f) => f.alimentacion?.idDietaVersion)
+          .filter((v): v is number => v != null),
+      ),
+    );
+    const compVersiones =
+      versionIds.length > 0
+        ? await this.dietaVersionInsumoRepository.find({
+            where: { idDietaVersion: In(versionIds) },
+            relations: ["insumo"],
+          })
+        : [];
+    // Costo unitario ($/kg) por versión: Σ (%/100 × precio de referencia).
+    const costoKgPorVersion = new Map<number, number>();
+    for (const v of compVersiones) {
+      const unit =
+        (costoKgPorVersion.get(v.idDietaVersion) ?? 0) +
+        (Number(v.porcentaje) / 100) *
+          (v.insumo?.precioReferencia == null
+            ? 0
+            : Number(v.insumo.precioReferencia));
+      costoKgPorVersion.set(v.idDietaVersion, unit);
+    }
+    const alimentaciones: BalanceAlimentacionRow[] = [...porEvento.entries()]
+      .map(([idAl, filas]) => {
+        const al = filas[0].alimentacion;
+        const unit = costoKgPorVersion.get(al?.idDietaVersion) ?? 0;
+        let cantidadKg = 0;
+        let nAnimales = 0;
+        for (const f of filas) {
+          cantidadKg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
+          nAnimales += f.nAnimales + f.nAnimalesEnfermeria;
+        }
+        return {
+          id: idAl,
+          fecha: this.fechaIso(al?.fecha) ?? "",
+          hora: (al?.hora ?? "12:00:00").slice(0, 8),
+          dietaNombre: al?.dieta?.nombre ?? "",
+          dietaVersion: al?.dietaVersion?.version ?? 0,
+          cantidadKg: r2(cantidadKg),
+          nAnimales,
+          costo: r2(cantidadKg * unit),
+          liquidada: al?.liquidada ?? false,
+        };
+      })
+      .sort((a, b) =>
+        a.fecha < b.fecha
+          ? 1
+          : a.fecha > b.fecha
+            ? -1
+            : a.hora < b.hora
+              ? 1
+              : a.hora > b.hora
+                ? -1
+                : b.id - a.id,
+      );
+
+    // --- Tratamientos de animales del lote ---
+    const animales = await this.animalRepository.find({
+      where: { idLote: lote.id },
+    });
+    const caravanaPorAnimal = new Map(
+      animales.map((a) => [a.id, a.caravana ?? null]),
+    );
+    const animalIds = animales.map((a) => a.id);
+    const aplicados =
+      animalIds.length > 0
+        ? await this.tratamientoAplicadoRepository.find({
+            where: { idAnimal: In(animalIds) },
+            relations: ["tratamiento", "insumos", "aplicacionLote"],
+            order: { fecha: "DESC", hora: "DESC", id: "DESC" },
+          })
+        : [];
+    const costoAplicado = (a: TratamientoAplicado): number =>
+      (a.precio == null ? 0 : Number(a.precio)) +
+      (a.insumos ?? []).reduce(
+        (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
+        0,
+      );
+    const porAplicacion = new Map<number, TratamientoAplicado[]>();
+    const individuales: TratamientoAplicado[] = [];
+    for (const a of aplicados) {
+      if (a.alcance === "lote" && a.idAplicacionLote != null) {
+        const lista = porAplicacion.get(a.idAplicacionLote) ?? [];
+        lista.push(a);
+        porAplicacion.set(a.idAplicacionLote, lista);
+      } else {
+        individuales.push(a);
+      }
+    }
+    const tratamientos: BalanceTratamientoRow[] = [
+      ...individuales.map((a): BalanceTratamientoRow => ({
+        kind: "animal",
+        id: a.id,
+        fecha: this.fechaIso(a.fecha) ?? "",
+        hora: (a.hora ?? "12:00:00").slice(0, 8),
+        nombres: [a.tratamiento?.nombre ?? ""],
+        caravana: caravanaPorAnimal.get(a.idAnimal) ?? null,
+        costo: r2(costoAplicado(a)),
+        liquidada: a.liquidada ?? false,
+      })),
+      ...[...porAplicacion.entries()].map(
+        ([idAplicacion, filas]): BalanceTratamientoRow => {
+          const cab = filas[0].aplicacionLote;
+          const nombres = Array.from(
+            new Set(filas.map((f) => f.tratamiento?.nombre ?? "")),
+          );
+          const idsAnimales = Array.from(new Set(filas.map((f) => f.idAnimal)));
+          const costo = filas.reduce((acc, f) => acc + costoAplicado(f), 0);
+          return {
+            kind: "lote",
+            id: idAplicacion,
+            fecha: this.fechaIso(cab?.fecha ?? filas[0].fecha) ?? "",
+            hora: (cab?.hora ?? filas[0].hora ?? "12:00:00").slice(0, 8),
+            nombres,
+            nAnimales: idsAnimales.length,
+            animales: idsAnimales
+              .map((id) => ({
+                id,
+                caravana: caravanaPorAnimal.get(id) ?? null,
+              }))
+              .sort((x, y) =>
+                (x.caravana ?? "").localeCompare(y.caravana ?? "", "es", {
+                  numeric: true,
+                }),
+              ),
+            costo: r2(costo),
+            liquidada: filas.every((f) => f.liquidada ?? false),
+          };
+        },
+      ),
+    ].sort((a, b) =>
+      a.fecha < b.fecha
+        ? 1
+        : a.fecha > b.fecha
+          ? -1
+          : a.hora < b.hora
+            ? 1
+            : a.hora > b.hora
+              ? -1
+              : b.id - a.id,
+    );
+
+    const total = r2(
+      alimentaciones.reduce((acc, a) => acc + a.costo, 0) +
+        tratamientos.reduce((acc, t) => acc + t.costo, 0),
+    );
+    const liquidado = r2(
+      alimentaciones.reduce((acc, a) => acc + (a.liquidada ? a.costo : 0), 0) +
+        tratamientos.reduce((acc, t) => acc + (t.liquidada ? t.costo : 0), 0),
+    );
+    return {
+      alimentaciones,
+      tratamientos,
+      totales: { total, liquidado, pendiente: r2(total - liquidado) },
+    };
+  }
+
+  /**
+   * Resumen de balances: un renglón por lote visible (mismo alcance que
+   * findAll: empresa + aislamiento de cliente) con sus totales. Liviano: sólo
+   * totales, sin el detalle por evento.
+   */
+  async getBalancesResumen(user: any): Promise<BalanceLoteResumen[]> {
+    const lotes = await this.findAll(user);
+    const out: BalanceLoteResumen[] = [];
+    for (const l of lotes) {
+      const t = await this.totalesDeLote(l.id);
+      out.push({
+        idLote: l.id,
+        loteNombre: l.nombre,
+        idEmpresa: l.idEmpresa,
+        nombreEmpresa: l.nombreEmpresa,
+        idCliente: l.idCliente,
+        clienteNombre: l.nombreCliente ?? l.idCliente,
+        nAnimales: l.nAnimales,
+        ...t,
+      });
+    }
+    return out;
   }
 
   /** 'YYYY-MM-DDTHH:MM:SS' (local) a partir de una columna DATE + hora. */
@@ -1540,7 +1841,6 @@ export class LotesService {
     }
 
     // Aplicar cambios por animal (ausente = no toca).
-    let actualizados = 0;
     const cambiosPorId = new Map<
       number,
       {
@@ -1564,6 +1864,9 @@ export class LotesService {
       });
     }
 
+    // Bulk: agrupa animales por cambio idéntico (un UPDATE ... WHERE id IN
+    // por grupo) y todo en una transacción (atómico, sin mitades).
+    const grupos = new Map<string, { fila: any; ids: number[] }>();
     for (const a of animales) {
       const cambios = cambiosPorId.get(a.id);
       if (!cambios) continue;
@@ -1573,9 +1876,19 @@ export class LotesService {
         fila.idCategoria = cambios.idCategoria;
       if (cambios.idPelaje !== undefined) fila.idPelaje = cambios.idPelaje;
       if (Object.keys(fila).length === 0) continue;
-      await this.animalRepository.update({ id: a.id }, fila);
-      actualizados += 1;
+      const clave = JSON.stringify(fila, Object.keys(fila).sort());
+      const grupo = grupos.get(clave) ?? { fila, ids: [] };
+      grupo.ids.push(a.id);
+      grupos.set(clave, grupo);
     }
+    let actualizados = 0;
+    await this.animalRepository.manager.transaction(async (em) => {
+      const repo = em.getRepository(Animal);
+      for (const { fila, ids } of grupos.values()) {
+        await repo.update({ id: In(ids) }, fila);
+        actualizados += ids.length;
+      }
+    });
     return { actualizados };
   }
 
@@ -1823,7 +2136,7 @@ export class LotesService {
     const ahora = new Date();
     const fecha = this.aDate(params.fecha) ?? ahora;
     const hora = this.normalizarHora(params.hora) ?? this.horaDe(ahora);
-    await this.movimientoRepository.save(
+    return this.movimientoRepository.save(
       this.movimientoRepository.create({
         idAnimal: params.idAnimal,
         tipo: params.tipo,
@@ -1990,6 +2303,89 @@ export class LotesService {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
     if (!m) return null;
     return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+
+  /**
+   * Totales de costo del lote (para el resumen): alimentaciones por reparto a
+   * precios de referencia + tratamientos a precios aplicados.
+   */
+  private async totalesDeLote(
+    idLote: number,
+  ): Promise<{ total: number; liquidado: number; pendiente: number }> {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    let total = 0;
+    let liquidado = 0;
+
+    const filasAl = await this.alimentacionLoteRepository.find({
+      where: { idLote },
+      relations: ["alimentacion"],
+    });
+    const versionIds = Array.from(
+      new Set(
+        filasAl
+          .map((f) => f.alimentacion?.idDietaVersion)
+          .filter((v): v is number => v != null),
+      ),
+    );
+    const compVersiones =
+      versionIds.length > 0
+        ? await this.dietaVersionInsumoRepository.find({
+            where: { idDietaVersion: In(versionIds) },
+            relations: ["insumo"],
+          })
+        : [];
+    const costoKgPorVersion = new Map<number, number>();
+    for (const v of compVersiones) {
+      const unit =
+        (costoKgPorVersion.get(v.idDietaVersion) ?? 0) +
+        (Number(v.porcentaje) / 100) *
+          (v.insumo?.precioReferencia == null
+            ? 0
+            : Number(v.insumo.precioReferencia));
+      costoKgPorVersion.set(v.idDietaVersion, unit);
+    }
+    const porEvento = new Map<number, typeof filasAl>();
+    for (const f of filasAl) {
+      const lista = porEvento.get(f.idAlimentacion) ?? [];
+      lista.push(f);
+      porEvento.set(f.idAlimentacion, lista);
+    }
+    for (const filas of porEvento.values()) {
+      const al = filas[0].alimentacion;
+      const unit = costoKgPorVersion.get(al?.idDietaVersion) ?? 0;
+      let kg = 0;
+      for (const f of filas) {
+        kg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
+      }
+      const costo = r2(kg * unit);
+      total += costo;
+      if (al?.liquidada) liquidado += costo;
+    }
+
+    const animales = await this.animalRepository.find({
+      where: { idLote },
+      select: ["id"],
+    });
+    if (animales.length > 0) {
+      const aplicados = await this.tratamientoAplicadoRepository.find({
+        where: { idAnimal: In(animales.map((a) => a.id)) },
+        relations: ["insumos"],
+      });
+      for (const a of aplicados) {
+        const costo = r2(
+          (a.precio == null ? 0 : Number(a.precio)) +
+            (a.insumos ?? []).reduce(
+              (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
+              0,
+            ),
+        );
+        total += costo;
+        if (a.liquidada ?? false) liquidado += costo;
+      }
+    }
+    total = r2(total);
+    liquidado = r2(liquidado);
+    return { total, liquidado, pendiente: r2(total - liquidado) };
   }
 
   private diffDias(ini: Date, fin: Date): number {
