@@ -13,7 +13,7 @@ import { Empresa } from "../entities/empresa.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Pesaje } from "../entities/pesaje.entity";
 import { Partida } from "../entities/partida.entity";
-import { Roles, PALETA_LOTE } from "src/constantes";
+import { Roles, PALETA_LOTE, esCliente } from "src/constantes";
 import { CreateLoteDto } from "./dto/create-lote.dto";
 import { UpdateLoteDto } from "./dto/update-lote.dto";
 import { CreateAnimalDto } from "./dto/create-animal.dto";
@@ -31,6 +31,7 @@ import { CatalogosService } from "../catalogos/catalogos.service";
 import { TratamientosService } from "../veterinaria/veterinaria.service";
 import { TratamientoAplicadoItemDto } from "../veterinaria/dto/aplicar-tratamiento.dto";
 import { AlimentacionLote } from "../entities/alimentacion-lote.entity";
+import { Alimentacion } from "../entities/alimentacion.entity";
 import { DietaVersionInsumo } from "../entities/dieta.entity";
 import { Insumo } from "../entities/insumo.entity";
 import {
@@ -58,6 +59,8 @@ export interface LoteResumen {
   createdAt: Date;
   updatedAt: Date;
   nAnimales: number;
+  /** Vivos (sano/enfermo). Sin vivos y con animales = lote cerrado (anteriores). */
+  nVivos: number;
 }
 
 export interface BalanceAlimentacionRow {
@@ -96,6 +99,15 @@ export interface BalanceView {
   totales: { total: number; liquidado: number; pendiente: number };
 }
 
+export interface BalanceSubtotales {
+  alimentacion: { liquidado: number; pendiente: number };
+  tratamientos: { liquidado: number; pendiente: number };
+}
+
+export interface BalanceResumido extends BalanceSubtotales {
+  totales: { total: number; liquidado: number; pendiente: number };
+}
+
 export interface BalanceLoteResumen {
   idLote: number;
   loteNombre: string;
@@ -107,6 +119,11 @@ export interface BalanceLoteResumen {
   total: number;
   liquidado: number;
   pendiente: number;
+  /** Sólo modo resumido (lectura:balance-lote-base): subtotales por rubro. */
+  desglose?: {
+    alimentacion: { liquidado: number; pendiente: number };
+    tratamientos: { liquidado: number; pendiente: number };
+  };
 }
 
 @Injectable()
@@ -162,7 +179,7 @@ export class LotesService {
       .leftJoinAndSelect("lote.proveedor", "proveedor")
       .leftJoinAndSelect("lote.lugarOrigen", "lugarOrigen");
     const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
-    const isCliente = !isAdmin && user.roles?.includes(Roles.CLIENTE);
+    const isCliente = !isAdmin && esCliente(user.roles);
     const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
       Number(e),
     );
@@ -610,6 +627,62 @@ export class LotesService {
     ).length;
   }
 
+  /**
+   * Partida objetivo de un pesaje INICIAL por fecha: si alguna partida ya
+   * tiene inicial en esa fecha (la de más animales, desempate menor id) se
+   * une a ella, salvo `nuevaPartida`; si no, se crea una nueva con la fecha
+   * del pesaje (también cubre la primera pesada: partida inicial por defecto).
+   */
+  private async resolverPartidaInicial(
+    idLote: number,
+    fecha: Date,
+    nuevaPartida: boolean,
+  ): Promise<Partida> {
+    const clave = this.fechaIso(fecha) ?? "";
+    if (!nuevaPartida && clave) {
+      const animalesLote = await this.animalRepository.find({
+        where: { idLote },
+        select: ["id", "idPartida"],
+      });
+      if (animalesLote.length > 0) {
+        const partidaPorAnimal = new Map(
+          animalesLote.map((a) => [a.id, a.idPartida]),
+        );
+        const iniciales = await this.pesajeRepository.find({
+          where: {
+            idAnimal: In(animalesLote.map((a) => a.id)),
+            tipo: "inicial",
+          },
+          select: ["idAnimal", "fecha"],
+        });
+        const conteo = new Map<number, number>();
+        for (const p of iniciales) {
+          if (this.fechaIso(p.fecha) !== clave) continue;
+          const pid = partidaPorAnimal.get(p.idAnimal);
+          if (pid == null) continue;
+          conteo.set(pid, (conteo.get(pid) ?? 0) + 1);
+        }
+        let mejor: number | null = null;
+        for (const [pid, c] of conteo) {
+          if (
+            mejor == null ||
+            c > conteo.get(mejor)! ||
+            (c === conteo.get(mejor)! && pid < mejor)
+          ) {
+            mejor = pid;
+          }
+        }
+        if (mejor != null) {
+          const existente = await this.partidaRepository.findOne({
+            where: { id: mejor, idLote },
+          });
+          if (existente) return existente;
+        }
+      }
+    }
+    return this.crearPartida(idLote, fecha);
+  }
+
   /** Elimina partidas que quedaron sin animales (tras borrar un animal). */
   private async limpiarPartidasVacias(idLote: number) {
     const partidas = await this.partidaRepository.find({ where: { idLote } });
@@ -619,6 +692,31 @@ export class LotesService {
       });
       if (n === 0) await this.partidaRepository.delete(p.id);
     }
+  }
+
+  /**
+   * Quita animales de su pesaje INICIAL: borra su fila 'inicial' y los saca
+   * de la partida (idPartida null; luego pueden sumarse a otro inicial).
+   * Valida pertenencia al lote; idempotente si ya no tienen inicial.
+   */
+  private async quitarDeInicial(
+    idLote: number,
+    animalIds: number[],
+  ): Promise<number[]> {
+    const unicos = [...new Set(animalIds)];
+    if (unicos.length === 0) return [];
+    const animales = await this.animalRepository.find({
+      where: { id: In(unicos), idLote },
+    });
+    if (animales.length !== unicos.length) {
+      throw new BadRequestException("Un animal a quitar no pertenece al lote");
+    }
+    await this.pesajeRepository.delete({
+      idAnimal: In(unicos),
+      tipo: "inicial",
+    });
+    await this.animalRepository.update({ id: In(unicos) }, { idPartida: null });
+    return unicos;
   }
 
   /**
@@ -1164,12 +1262,17 @@ export class LotesService {
   }
 
   /**
-   * Balance económico del lote: costos registrados (alimentaciones con su
-   * costo a precios de referencia + tratamientos/insumos veterinarios con
-   * sus precios aplicados) y totales (total / liquidado / pendiente).
-   * Las aplicaciones al lote van en UN registro (con sus animales).
+   * Balance económico del lote. Con `lectura:balance-lote` devuelve el
+   * detalle completo; con sólo `lectura:balance-lote-base`, el resumido
+   * (subtotales por rubro, sin detalle por evento).
    */
-  async getBalance(idLote: number, user: any): Promise<BalanceView> {
+  async getBalance(
+    idLote: number,
+    user: any,
+  ): Promise<BalanceView | BalanceResumido> {
+    if (!user?.permisos?.includes("lectura:balance-lote")) {
+      return this.getBalanceResumido(idLote, user);
+    }
     const lote = await this.getLoteVerificado(idLote, user);
     const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1349,25 +1452,78 @@ export class LotesService {
   }
 
   /**
+   * Balance resumido del lote (permiso lectura:balance-lote-base): subtotal de
+   * alimentación y subtotal de tratamientos/insumos, cada uno con su parte
+   * liquidada y pendiente. Sin detalle por evento.
+   */
+  async getBalanceResumido(
+    idLote: number,
+    user: any,
+  ): Promise<BalanceResumido> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const sub = await this.subtotalesDeLote(lote.id);
+    const total =
+      sub.alimentacion.liquidado +
+      sub.alimentacion.pendiente +
+      sub.tratamientos.liquidado +
+      sub.tratamientos.pendiente;
+    const liquidado = sub.alimentacion.liquidado + sub.tratamientos.liquidado;
+    return {
+      ...sub,
+      totales: { total, liquidado, pendiente: total - liquidado },
+    };
+  }
+
+  /**
    * Resumen de balances: un renglón por lote visible (mismo alcance que
    * findAll: empresa + aislamiento de cliente) con sus totales. Liviano: sólo
    * totales, sin el detalle por evento.
    */
   async getBalancesResumen(user: any): Promise<BalanceLoteResumen[]> {
     const lotes = await this.findAll(user);
+    // Sin lectura:balance-lote (sólo base): cada renglón trae el desglose por
+    // rubro en vez del detalle.
+    const base = !user?.permisos?.includes("lectura:balance-lote");
     const out: BalanceLoteResumen[] = [];
     for (const l of lotes) {
-      const t = await this.totalesDeLote(l.id);
-      out.push({
-        idLote: l.id,
-        loteNombre: l.nombre,
-        idEmpresa: l.idEmpresa,
-        nombreEmpresa: l.nombreEmpresa,
-        idCliente: l.idCliente,
-        clienteNombre: l.nombreCliente ?? l.idCliente,
-        nAnimales: l.nAnimales,
-        ...t,
-      });
+      if (base) {
+        const sub = await this.subtotalesDeLote(l.id);
+        const total =
+          sub.alimentacion.liquidado +
+          sub.alimentacion.pendiente +
+          sub.tratamientos.liquidado +
+          sub.tratamientos.pendiente;
+        const liquidado =
+          sub.alimentacion.liquidado + sub.tratamientos.liquidado;
+        out.push({
+          idLote: l.id,
+          loteNombre: l.nombre,
+          idEmpresa: l.idEmpresa,
+          nombreEmpresa: l.nombreEmpresa,
+          idCliente: l.idCliente,
+          clienteNombre: l.nombreCliente ?? l.idCliente,
+          nAnimales: l.nAnimales,
+          total,
+          liquidado,
+          pendiente: total - liquidado,
+          desglose: {
+            alimentacion: sub.alimentacion,
+            tratamientos: sub.tratamientos,
+          },
+        });
+      } else {
+        const t = await this.totalesDeLote(l.id);
+        out.push({
+          idLote: l.id,
+          loteNombre: l.nombre,
+          idEmpresa: l.idEmpresa,
+          nombreEmpresa: l.nombreEmpresa,
+          idCliente: l.idCliente,
+          clienteNombre: l.nombreCliente ?? l.idCliente,
+          nAnimales: l.nAnimales,
+          ...t,
+        });
+      }
     }
     return out;
   }
@@ -1429,13 +1585,22 @@ export class LotesService {
     const fecha = this.aDate(dto.fecha);
     if (!fecha) throw new BadRequestException("Fecha de pesaje inválida");
 
+    // INICIAL: quitar animales del pesaje (borra su fila 'inicial' y los saca
+    // de la partida; luego pueden sumarse a otro inicial). Idempotente y antes
+    // de todo para que el resto vea el estado limpio.
+    const quitados: number[] =
+      tipo === "inicial"
+        ? await this.quitarDeInicial(lote.id, dto.quitar ?? [])
+        : [];
+
     // Objetivo (candidatos): vivos del alcance + los que YA tienen un pesaje de
     // este tipo en el contexto (incluidos los SALIDOS, para corregir peso/fecha).
-    //  - INICIAL: por partida (si viene idPartida) o todo el lote; contexto = 'inicial'.
+    //  - INICIAL: todo el lote (la partida la resuelve el server por fecha,
+    //    ignora idPartida); contexto = 'inicial'.
     //  - INTERMEDIO: lote o partida; contexto = 'intermedio' de ESTA fecha.
     //  - FINAL: lote; contexto = 'final'.
     const alcance: any = { idLote: lote.id };
-    if (dto.idPartida) {
+    if (dto.idPartida && tipo !== "inicial") {
       const partida = await this.partidaRepository.findOne({
         where: { id: dto.idPartida, idLote: lote.id },
       });
@@ -1474,11 +1639,11 @@ export class LotesService {
         throw new BadRequestException("No hay animales para repartir el total");
       }
     } else {
-      if (!dto.animales?.length) {
+      if (!dto.animales?.length && quitados.length === 0) {
         throw new BadRequestException("Ingresá el peso de cada animal");
       }
       animales = [];
-      for (const r of dto.animales) {
+      for (const r of dto.animales ?? []) {
         const a = candidatosById.get(r.animalId);
         if (!a) {
           throw new BadRequestException(
@@ -1532,47 +1697,81 @@ export class LotesService {
       const w = porAnimal(a);
       if (w) pesos.set(a.id, w);
     }
-    if (pesos.size === 0) {
+    if (pesos.size === 0 && quitados.length === 0) {
       throw new BadRequestException("No hay pesos para guardar");
+    }
+    const ids = Array.from(pesos.keys());
+    const vivosIds = animales
+      .filter((a) => a.estado === "sano" || a.estado === "enfermo")
+      .map((a) => a.id);
+
+    // INICIAL: la partida se decide por fecha ANTES de guardar (para no contar
+    // los propios pesajes como "anteriores"): misma fecha = se une a esa
+    // partida (salvo bandera `nuevaPartida`); distinta fecha (o flag, o sin
+    // iniciales previos) = partida nueva con la fecha del pesaje. Sólo si hay
+    // vivos pesados (si sólo hay quitados no hay destino que resolver).
+    let partidaInicial: Partida | null = null;
+    if (tipo === "inicial" && vivosIds.length > 0) {
+      partidaInicial = await this.resolverPartidaInicial(
+        lote.id,
+        fecha,
+        dto.nuevaPartida === true,
+      );
     }
 
     // 1) Upsert BULK de pesajes: 1 SELECT + 1 save(array) (transacción única).
-    const ids = Array.from(pesos.keys());
-    const whereExistentes: any = { idAnimal: In(ids), tipo };
-    if (tipo === "intermedio") whereExistentes.fecha = fecha;
-    const existentes = await this.pesajeRepository.find({
-      where: whereExistentes,
-    });
-    const porAnimalExistente = new Map<number, Pesaje>(
-      existentes.map((p) => [p.idAnimal, p]),
-    );
-    const aGuardar: Pesaje[] = [];
-    for (const [animalId, w] of pesos) {
-      const neto = redondear(w.peso - Number(w.desbaste ?? 0));
-      const e = porAnimalExistente.get(animalId);
-      if (e) {
-        e.fecha = fecha;
-        e.peso = w.peso;
-        e.desbaste = w.desbaste;
-        e.pesoNeto = neto;
-        aGuardar.push(e);
-      } else {
-        aGuardar.push(
-          this.pesajeRepository.create({
-            idAnimal: animalId,
-            tipo,
-            fecha,
-            peso: w.peso,
-            desbaste: w.desbaste,
-            pesoNeto: neto,
-          }),
+    // Se saltea si sólo hay quitados.
+    if (pesos.size > 0) {
+      const whereExistentes: any = { idAnimal: In(ids), tipo };
+      if (tipo === "intermedio") whereExistentes.fecha = fecha;
+      const existentes = await this.pesajeRepository.find({
+        where: whereExistentes,
+      });
+      const porAnimalExistente = new Map<number, Pesaje>(
+        existentes.map((p) => [p.idAnimal, p]),
+      );
+      const aGuardar: Pesaje[] = [];
+      for (const [animalId, w] of pesos) {
+        const neto = redondear(w.peso - Number(w.desbaste ?? 0));
+        const e = porAnimalExistente.get(animalId);
+        if (e) {
+          e.fecha = fecha;
+          e.peso = w.peso;
+          e.desbaste = w.desbaste;
+          e.pesoNeto = neto;
+          aGuardar.push(e);
+        } else {
+          aGuardar.push(
+            this.pesajeRepository.create({
+              idAnimal: animalId,
+              tipo,
+              fecha,
+              peso: w.peso,
+              desbaste: w.desbaste,
+              pesoNeto: neto,
+            }),
+          );
+        }
+      }
+      await this.pesajeRepository.save(aGuardar);
+    }
+
+    // INICIAL: mueve los VIVOS pesados a la partida resuelta (salidos/muertos
+    // corrigen peso pero conservan su partida) y limpia las que queden vacías
+    // (incluidas las vaciadas por quitados).
+    if (tipo === "inicial") {
+      if (partidaInicial && vivosIds.length > 0) {
+        await this.animalRepository.update(
+          { id: In(vivosIds) },
+          { idPartida: partidaInicial.id },
         );
       }
+      await this.limpiarPartidasVacias(lote.id);
     }
-    await this.pesajeRepository.save(aGuardar);
 
-    // 2) Proyección BULK de los animales afectados.
-    await this.proyectarAnimales(ids);
+    // 2) Proyección BULK de los animales afectados (pesados + quitados, para
+    // limpiar las columnas de los removidos).
+    await this.proyectarAnimales([...new Set([...ids, ...quitados])]);
     return { actualizados: ids.length };
   }
 
@@ -2018,7 +2217,7 @@ export class LotesService {
         throw new ForbiddenException("No tiene permisos sobre este lote");
       }
       // Un cliente sólo accede a sus propias partidas.
-      if (user.roles?.includes(Roles.CLIENTE) && lote.idCliente !== user.id) {
+      if (esCliente(user.roles) && lote.idCliente !== user.id) {
         throw new NotFoundException("Lote no encontrado");
       }
     }
@@ -2061,10 +2260,7 @@ export class LotesService {
     const titular = todos.find((u) => u.uid === idCliente);
     if (
       !titular ||
-      !(
-        titular.roles.includes(Roles.CLIENTE) ||
-        titular.roles.includes(Roles.ANFITRION)
-      ) ||
+      !(esCliente(titular.roles) || titular.roles.includes(Roles.ANFITRION)) ||
       !titular.idEmpresas.includes(idEmpresa)
     ) {
       throw new BadRequestException(
@@ -2208,6 +2404,17 @@ export class LotesService {
     const countBy = new Map<number, number>(
       counts.map((c) => [Number(c.idLote), Number(c.n)]),
     );
+    const countsVivos = await this.animalRepository
+      .createQueryBuilder("a")
+      .select("a.idLote", "idLote")
+      .addSelect("COUNT(*)", "n")
+      .where("a.idLote IN (:...ids)", { ids })
+      .andWhere("a.estado IN ('sano','enfermo')")
+      .groupBy("a.idLote")
+      .getRawMany();
+    const countVivosBy = new Map<number, number>(
+      countsVivos.map((c) => [Number(c.idLote), Number(c.n)]),
+    );
 
     const usuarios = await this.cache.getOrLoadUsuarios();
     const nameByUid = new Map<string, string | null>(
@@ -2234,6 +2441,7 @@ export class LotesService {
       createdAt: l.createdAt,
       updatedAt: l.updatedAt,
       nAnimales: countBy.get(l.id) ?? 0,
+      nVivos: countVivosBy.get(l.id) ?? 0,
     }));
   }
 
@@ -2303,6 +2511,158 @@ export class LotesService {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
     if (!m) return null;
     return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+
+  /**
+   * Liquida ítems del balance (los marca `liquidada`): alimentaciones,
+   * tratamientos individuales o aplicaciones al lote (marca todos sus
+   * detalles). Todo verificado contra el lote + transacción atómica.
+   */
+  async liquidar(
+    idLote: number,
+    items: { tipo: string; id: number }[],
+    user: any,
+  ): Promise<{ liquidados: number }> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    let liquidados = 0;
+    await this.alimentacionLoteRepository.manager.transaction(async (em) => {
+      for (const it of items ?? []) {
+        if (it.tipo === "alimentacion") {
+          const toca = await em
+            .getRepository(AlimentacionLote)
+            .findOne({ where: { idAlimentacion: it.id, idLote: lote.id } });
+          if (!toca) {
+            throw new BadRequestException(
+              "Una alimentación no pertenece al lote",
+            );
+          }
+          await em
+            .getRepository(Alimentacion)
+            .update({ id: it.id }, { liquidada: true });
+          liquidados += 1;
+        } else if (it.tipo === "tratamiento") {
+          const ap = await em.getRepository(TratamientoAplicado).findOne({
+            where: { id: it.id },
+            relations: ["animal"],
+          });
+          if (!ap || ap.animal?.idLote !== lote.id) {
+            throw new BadRequestException(
+              "Un tratamiento no pertenece al lote",
+            );
+          }
+          await em
+            .getRepository(TratamientoAplicado)
+            .update({ id: it.id }, { liquidada: true });
+          liquidados += 1;
+        } else if (it.tipo === "aplicacion") {
+          const cab = await em.getRepository(TratamientoAplicadoLote).findOne({
+            where: { id: it.id, idLote: lote.id },
+          });
+          if (!cab) {
+            throw new BadRequestException(
+              "Una aplicación no pertenece al lote",
+            );
+          }
+          const r = await em
+            .getRepository(TratamientoAplicado)
+            .update({ idAplicacionLote: cab.id }, { liquidada: true });
+          liquidados += r.affected ?? 0;
+        } else {
+          throw new BadRequestException("Tipo de ítem desconocido");
+        }
+      }
+    });
+    return { liquidados };
+  }
+
+  /**
+   * Subtotales de costo del lote por rubro (para el resumido): alimentación y
+   * tratamientos, cada uno con su parte liquidada y pendiente.
+   */
+  private async subtotalesDeLote(idLote: number): Promise<BalanceSubtotales> {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    let alimLiquidado = 0;
+    let alimPendiente = 0;
+    let tratLiquidado = 0;
+    let tratPendiente = 0;
+
+    const filasAl = await this.alimentacionLoteRepository.find({
+      where: { idLote },
+      relations: ["alimentacion"],
+    });
+    const versionIds = Array.from(
+      new Set(
+        filasAl
+          .map((f) => f.alimentacion?.idDietaVersion)
+          .filter((v): v is number => v != null),
+      ),
+    );
+    const compVersiones =
+      versionIds.length > 0
+        ? await this.dietaVersionInsumoRepository.find({
+            where: { idDietaVersion: In(versionIds) },
+            relations: ["insumo"],
+          })
+        : [];
+    const costoKgPorVersion = new Map<number, number>();
+    for (const v of compVersiones) {
+      const unit =
+        (costoKgPorVersion.get(v.idDietaVersion) ?? 0) +
+        (Number(v.porcentaje) / 100) *
+          (v.insumo?.precioReferencia == null
+            ? 0
+            : Number(v.insumo.precioReferencia));
+      costoKgPorVersion.set(v.idDietaVersion, unit);
+    }
+    const porEvento = new Map<number, typeof filasAl>();
+    for (const f of filasAl) {
+      const lista = porEvento.get(f.idAlimentacion) ?? [];
+      lista.push(f);
+      porEvento.set(f.idAlimentacion, lista);
+    }
+    for (const filas of porEvento.values()) {
+      const al = filas[0].alimentacion;
+      const unit = costoKgPorVersion.get(al?.idDietaVersion) ?? 0;
+      let kg = 0;
+      for (const f of filas) {
+        kg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
+      }
+      const costo = r2(kg * unit);
+      if (al?.liquidada) alimLiquidado += costo;
+      else alimPendiente += costo;
+    }
+
+    const animales = await this.animalRepository.find({
+      where: { idLote },
+      select: ["id"],
+    });
+    if (animales.length > 0) {
+      const aplicados = await this.tratamientoAplicadoRepository.find({
+        where: { idAnimal: In(animales.map((a) => a.id)) },
+        relations: ["insumos"],
+      });
+      for (const a of aplicados) {
+        const costo = r2(
+          (a.precio == null ? 0 : Number(a.precio)) +
+            (a.insumos ?? []).reduce(
+              (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
+              0,
+            ),
+        );
+        if (a.liquidada ?? false) tratLiquidado += costo;
+        else tratPendiente += costo;
+      }
+    }
+    return {
+      alimentacion: {
+        liquidado: r2(alimLiquidado),
+        pendiente: r2(alimPendiente),
+      },
+      tratamientos: {
+        liquidado: r2(tratLiquidado),
+        pendiente: r2(tratPendiente),
+      },
+    };
   }
 
   /**

@@ -792,8 +792,10 @@ export class AlimentacionService {
       idCliente?: string;
       fechaDesde?: string;
       fechaHasta?: string;
+      page?: number;
+      pageSize?: number;
     } = {},
-  ): Promise<AlimentacionView[]> {
+  ): Promise<{ data: AlimentacionView[]; total: number }> {
     const empresaId = this.empresaActual(user);
     const isAdmin = this.esSysAdmin(user);
     const qb = this.alimentacionRepository
@@ -811,7 +813,7 @@ export class AlimentacionService {
       const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
         Number(e),
       );
-      if (userEmpresas.length === 0) return [];
+      if (userEmpresas.length === 0) return { data: [], total: 0 };
       qb.where("a.id_empresa IN (:...ids)", { ids: userEmpresas });
     }
 
@@ -831,11 +833,126 @@ export class AlimentacionService {
       );
     }
 
+    // Total sin paginar (el count ignora orden/skip/take).
+    const total = await qb.clone().getCount();
+    const size = Math.min(Math.max(Number(f.pageSize) || 20, 1), 100);
+    const page = Math.max(Number(f.page) || 1, 1);
     qb.orderBy("a.fecha", "DESC").addOrderBy("a.id", "DESC");
+    qb.skip((page - 1) * size).take(size);
     const filas = await qb.getMany();
     const usuarios = await this.cache.getOrLoadUsuarios();
     const nombreByUid = new Map(usuarios.map((u) => [u.uid, u.nombreUsuario]));
-    return filas.map((a) => this.toView(a, nombreByUid));
+    return {
+      data: filas.map((a) => this.toView(a, nombreByUid)),
+      total,
+    };
+  }
+
+  /**
+   * Opciones de filtros (clientes/corrales/lotes con alimentaciones): cada
+   * lista se restringe por los DEMÁS filtros (encadenados, sin rango de
+   * fechas) y por el alcance del usuario.
+   */
+  async filtros(
+    user: any,
+    f: { idCliente?: string; idCorral?: number; idLote?: number } = {},
+  ): Promise<{
+    clientes: { id: string; nombre: string }[];
+    corrales: { id: number; nombre: string }[];
+    lotes: { id: number; nombre: string }[];
+  }> {
+    const empresaId = this.empresaActual(user);
+    const isAdmin = this.esSysAdmin(user);
+    let userEmpresas: number[] = [];
+    if (!empresaId && !isAdmin) {
+      userEmpresas = (user.idEmpresas || [])
+        .map((e: any) => Number(e))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (userEmpresas.length === 0) {
+        return { clientes: [], corrales: [], lotes: [] };
+      }
+    }
+    // Alcance base sobre alimentacion (alias "a").
+    const scope = (qb: { andWhere: (...args: any[]) => void }) => {
+      if (empresaId) {
+        qb.andWhere("a.id_empresa = :e", { e: empresaId });
+      } else if (!isAdmin) {
+        qb.andWhere("a.id_empresa IN (:...ids)", { ids: userEmpresas });
+      }
+    };
+    const porLote = (qb: { andWhere: (...args: any[]) => void }) => {
+      if (f.idLote) {
+        qb.andWhere(
+          "EXISTS (SELECT 1 FROM alimentacion_lote x WHERE x.id_alimentacion = a.id AND x.id_lote = :lote)",
+          { lote: f.idLote },
+        );
+      }
+    };
+    const porCliente = (qb: { andWhere: (...args: any[]) => void }) => {
+      if (f.idCliente) {
+        qb.andWhere(
+          "EXISTS (SELECT 1 FROM alimentacion_lote y WHERE y.id_alimentacion = a.id AND y.id_cliente = :cli)",
+          { cli: f.idCliente },
+        );
+      }
+    };
+    const porCorral = (qb: { andWhere: (...args: any[]) => void }) => {
+      if (f.idCorral) {
+        qb.andWhere("a.id_corral = :c", { c: f.idCorral });
+      }
+    };
+
+    // Corrales (filtra por cliente+lote, no por corral).
+    const qbC = this.alimentacionRepository
+      .createQueryBuilder("a")
+      .select("c.id", "id")
+      .addSelect("c.nombre", "nombre")
+      .distinct(true)
+      .innerJoin("a.corral", "c");
+    scope(qbC);
+    porCliente(qbC);
+    porLote(qbC);
+    const corrales = (await qbC.getRawMany<{ id: number; nombre: string }>())
+      .map((c) => ({ id: Number(c.id), nombre: c.nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+
+    // Lotes (filtra por cliente+corral, no por lote).
+    const qbL = this.loteRepository
+      .createQueryBuilder("al")
+      .select("l.id", "id")
+      .addSelect("l.nombre", "nombre")
+      .distinct(true)
+      .innerJoin("al.lote", "l")
+      .innerJoin("al.alimentacion", "a");
+    scope(qbL);
+    porCliente(qbL);
+    porCorral(qbL);
+    const lotes = (await qbL.getRawMany<{ id: number; nombre: string }>())
+      .map((l) => ({ id: Number(l.id), nombre: l.nombre }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+
+    // Clientes (filtra por corral+lote, no por cliente).
+    const qbCli = this.loteRepository
+      .createQueryBuilder("al")
+      .select("al.id_cliente", "id")
+      .distinct(true)
+      .innerJoin("al.alimentacion", "a")
+      .where("al.id_cliente IS NOT NULL");
+    scope(qbCli);
+    porCorral(qbCli);
+    porLote(qbCli);
+    const cliIds = (await qbCli.getRawMany<{ id: string }>()).map((r) => r.id);
+    const usuarios = await this.cache.getOrLoadUsuarios();
+    const nombreByUid = new Map(usuarios.map((u) => [u.uid, u.nombreUsuario]));
+    const clientes = cliIds
+      .map((id) => ({ id, nombre: nombreByUid.get(id) ?? id }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+
+    return {
+      clientes,
+      corrales,
+      lotes,
+    };
   }
 
   private async obtenerDetalle(id: number): Promise<AlimentacionView> {

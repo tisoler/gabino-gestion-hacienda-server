@@ -27,6 +27,7 @@ import { UpdateAnimalDto } from "./dto/update-animal.dto";
 import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
+import { LiquidarBalanceDto } from "./dto/liquidar-balance.dto";
 import { CreateSalidaDto } from "./dto/create-salida.dto";
 import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
@@ -64,12 +65,13 @@ export class LotesController {
   }
 
   @Get("balances")
-  @Permissions("lectura:balance-lote")
+  @Permissions("lectura:balance-lote", "lectura:balance-lote-base")
   @ApiOperation({
     summary: "Resumen de balances por lote visible (totales)",
     description:
       "Un renglón por lote accesible (empresa actual + aislamiento de " +
-      "cliente): totales total / liquidado / pendiente.",
+      "cliente): totales total / liquidado / pendiente. Con sólo " +
+      "lectura:balance-lote-base agrega el desglose por rubro.",
   })
   getBalances(@Request() req) {
     return this.lotesService.getBalancesResumen(req.user);
@@ -234,10 +236,12 @@ export class LotesController {
   }
 
   @Get(":id/balance")
-  @Permissions("lectura:balance-lote")
+  @Permissions("lectura:balance-lote", "lectura:balance-lote-base")
   @ApiOperation({
     summary: "Balance económico del lote (costos registrados)",
     description:
+      "Con lectura:balance-lote: detalle completo. Con sólo " +
+      "lectura:balance-lote-base: resumido (subtotales por rubro, sin detalle). " +
       "Alimentaciones con su costo a precios de referencia + tratamientos " +
       "veterinarios con sus precios aplicados, y totales (total / liquidado / " +
       "pendiente). Las aplicaciones al lote van en un solo registro.",
@@ -245,6 +249,24 @@ export class LotesController {
   @ApiParam({ name: "id", type: Number, description: "ID del lote" })
   getBalance(@Param("id", ParseIntPipe) id: number, @Request() req) {
     return this.lotesService.getBalance(id, req.user);
+  }
+
+  @Post(":id/liquidar")
+  @Permissions("escritura:balance-lote")
+  @ApiOperation({
+    summary: "Liquidar ítems del balance (los marca liquidados)",
+    description:
+      "Alimentaciones, tratamientos individuales o aplicaciones al lote " +
+      "(marca todos sus detalles). Cada ítem se verifica contra el lote; " +
+      "todo en una transacción.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  liquidar(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: LiquidarBalanceDto,
+    @Request() req,
+  ) {
+    return this.lotesService.liquidar(id, dto.items, req.user);
   }
 
   @Post(":id/salidas")

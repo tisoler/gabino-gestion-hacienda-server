@@ -16,7 +16,7 @@ import { CategoriaInsumo, Insumo } from "../entities/insumo.entity";
 import { Animal } from "../entities/animal.entity";
 import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Lote } from "../entities/lote.entity";
-import { Roles } from "src/constantes";
+import { Roles, esCliente } from "src/constantes";
 import { capitalizarNombre } from "../utils/nombres.util";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { CreateTratamientoDto } from "./dto/create-tratamiento.dto";
@@ -861,7 +861,7 @@ export class TratamientosService {
       if (!userEmpresas.includes(lote.idEmpresa)) {
         throw new ForbiddenException("No tiene permisos sobre este lote");
       }
-      if (user.roles?.includes(Roles.CLIENTE) && lote.idCliente !== user.id) {
+      if (esCliente(user.roles) && lote.idCliente !== user.id) {
         throw new NotFoundException("Lote no encontrado");
       }
     }

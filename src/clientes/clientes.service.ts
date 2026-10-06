@@ -8,7 +8,7 @@ import { Repository } from "typeorm";
 import * as admin from "firebase-admin";
 import { EmpresaCliente } from "../entities/empresa-cliente.entity";
 import { Empresa } from "../entities/empresa.entity";
-import { Roles, ID_ROL_OPERARIO } from "src/constantes";
+import { Roles, ID_ROL_OPERARIO, esCliente } from "src/constantes";
 import type { UsuarioBasico } from "../cache/firestore-cache.service";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 
@@ -118,7 +118,7 @@ export class ClientesService {
   async findCandidatos(user: any): Promise<UsuarioBasico[]> {
     const todos = await this.cache.getOrLoadUsuarios();
     const candidatos = todos.filter(
-      (u) => u.roles.includes(Roles.CLIENTE) || u.roles.length === 0,
+      (u) => esCliente(u.roles) || u.roles.length === 0,
     );
 
     const empresaId = user.currentEmpresaId;
@@ -177,10 +177,7 @@ export class ClientesService {
     // El destino debe ser un usuario con rol cliente o sin rol (pendiente).
     const todos = await this.cache.getOrLoadUsuarios();
     const target = todos.find((u) => u.uid === uid);
-    if (
-      !target ||
-      !(target.roles.includes(Roles.CLIENTE) || target.roles.length === 0)
-    ) {
+    if (!target || !(esCliente(target.roles) || target.roles.length === 0)) {
       throw new NotFoundException(
         "Usuario no encontrado o no apto para ser vinculado a tu empresa",
       );

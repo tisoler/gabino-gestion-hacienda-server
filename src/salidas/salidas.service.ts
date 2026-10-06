@@ -8,7 +8,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Salida } from "../entities/salida.entity";
 import { Lote } from "../entities/lote.entity";
-import { Roles } from "src/constantes";
+import { Roles, esCliente } from "src/constantes";
 import { FirestoreCacheService } from "../cache/firestore-cache.service";
 import { ActualizarSalidaFechaDto } from "./dto/actualizar-salida-fecha.dto";
 
@@ -66,7 +66,7 @@ export class SalidasService {
     } = {},
   ): Promise<SalidaView[]> {
     const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
-    const isCliente = !isAdmin && user.roles?.includes(Roles.CLIENTE);
+    const isCliente = !isAdmin && esCliente(user.roles);
     const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
       Number(e),
     );
@@ -194,10 +194,7 @@ export class SalidasService {
       if (!userEmpresas.includes(salida.idEmpresa)) {
         throw new ForbiddenException("No tiene permisos sobre esta salida");
       }
-      if (
-        user.roles?.includes(Roles.CLIENTE) &&
-        salida.lote?.idCliente !== user.id
-      ) {
+      if (esCliente(user.roles) && salida.lote?.idCliente !== user.id) {
         throw new NotFoundException("Salida no encontrada");
       }
     }

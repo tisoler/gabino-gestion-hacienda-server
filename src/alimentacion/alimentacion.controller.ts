@@ -55,6 +55,30 @@ export class AlimentacionController {
     return this.service.estadoCorral(idCorral, fecha, hora, req.user);
   }
 
+  @Get("filtros")
+  @Permissions("lectura:alimento")
+  @ApiOperation({
+    summary: "Opciones de filtros (clientes/corrales/lotes con alimentaciones)",
+    description:
+      "Cada lista se restringe por los DEMÁS filtros (encadenados, sin rango " +
+      "de fechas). Lo usa la vista para no traer todo el histórico.",
+  })
+  @ApiQuery({ name: "idCorral", required: false, type: Number })
+  @ApiQuery({ name: "idLote", required: false, type: Number })
+  @ApiQuery({ name: "idCliente", required: false })
+  filtros(
+    @Request() req,
+    @Query("idCorral") idCorral?: number,
+    @Query("idLote") idLote?: number,
+    @Query("idCliente") idCliente?: string,
+  ) {
+    return this.service.filtros(req.user, {
+      idCorral: idCorral != null ? Number(idCorral) : undefined,
+      idLote: idLote != null ? Number(idLote) : undefined,
+      idCliente,
+    });
+  }
+
   @Get()
   @Permissions("lectura:alimento")
   @ApiOperation({ summary: "Listar alimentaciones (histórico) con filtros" })
@@ -63,6 +87,12 @@ export class AlimentacionController {
   @ApiQuery({ name: "idCliente", required: false })
   @ApiQuery({ name: "fechaDesde", required: false, description: "YYYY-MM-DD" })
   @ApiQuery({ name: "fechaHasta", required: false, description: "YYYY-MM-DD" })
+  @ApiQuery({ name: "page", required: false, description: "Página (base 1)" })
+  @ApiQuery({
+    name: "pageSize",
+    required: false,
+    description: "Filas por página (máx 100)",
+  })
   listar(
     @Request() req,
     @Query("idCorral") idCorral?: number,
@@ -70,13 +100,17 @@ export class AlimentacionController {
     @Query("idCliente") idCliente?: string,
     @Query("fechaDesde") fechaDesde?: string,
     @Query("fechaHasta") fechaHasta?: string,
-  ): Promise<AlimentacionView[]> {
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+  ): Promise<{ data: AlimentacionView[]; total: number }> {
     return this.service.listar(req.user, {
       idCorral: idCorral != null ? Number(idCorral) : undefined,
       idLote: idLote != null ? Number(idLote) : undefined,
       idCliente,
       fechaDesde,
       fechaHasta,
+      page: page != null ? Number(page) : undefined,
+      pageSize: pageSize != null ? Number(pageSize) : undefined,
     });
   }
 

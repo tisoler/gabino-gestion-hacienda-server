@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -58,13 +59,31 @@ export class CargarPesajesDto {
   animales?: PesajeAnimalRowDto[];
 
   /**
-   * Partida objetivo del PESAJE INICIAL (cada partida pesa su propio inicial).
-   * Para intermedios/finales se ignora: son del lote completo.
+   * Alcance por partida SÓLO para intermedios (el inicial lo resuelve el
+   * server por fecha; el final es del lote).
    */
   @IsOptional()
   @IsInt()
   @Min(1)
   idPartida?: number;
+
+  /**
+   * Sólo PESAJE INICIAL: fuerza una partida NUEVA aunque la fecha coincida
+   * con otro inicial. Sin él, misma fecha = se une a esa partida.
+   */
+  @IsOptional()
+  @IsBoolean()
+  nuevaPartida?: boolean;
+
+  /**
+   * Sólo PESAJE INICIAL: ids de animales a QUITAR del pesaje (borra su fila
+   * 'inicial' y los saca de la partida; luego pueden sumarse a otro inicial).
+   * Permite guardar sólo con quitados (sin pesos nuevos).
+   */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  quitar?: number[];
 }
 
 /** Edición de un pesaje puntual (peso/desbaste/fecha). */

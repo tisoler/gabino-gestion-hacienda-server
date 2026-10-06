@@ -9,7 +9,7 @@ import { In, IsNull, Repository } from "typeorm";
 import { Corral } from "../entities/corral.entity";
 import { Lote } from "../entities/lote.entity";
 import { Animal } from "../entities/animal.entity";
-import { Roles } from "src/constantes";
+import { Roles, esCliente } from "src/constantes";
 import { capitalizarNombre } from "../utils/nombres.util";
 import { CreateCorralDto } from "./dto/create-corral.dto";
 import { UpdateCorralDto } from "./dto/update-corral.dto";
@@ -267,7 +267,7 @@ export class CorralesService {
     if (!empresaId) return [];
 
     const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
-    const esCliente = !isAdmin && user.roles?.includes(Roles.CLIENTE);
+    const soloCliente = !isAdmin && esCliente(user.roles);
 
     const corrals = await this.corralRepository.find({
       where: { idEmpresa: empresaId, activo: true },
@@ -288,7 +288,7 @@ export class CorralesService {
             relations: ["lote"],
             order: { nAnimal: "ASC", id: "ASC" },
           });
-          const visibles = esCliente
+          const visibles = soloCliente
             ? adentro.filter((a) => a.lote?.idCliente === user.id)
             : adentro;
           animales = visibles.map((a) => this.token(a));
@@ -298,10 +298,10 @@ export class CorralesService {
             order: { id: "ASC" },
           });
           // Un cliente no ve corrales ajenos (sólo sus lotes dentro del común).
-          const visibles = esCliente
+          const visibles = soloCliente
             ? ocupantes.filter((l) => l.idCliente === user.id)
             : ocupantes;
-          if (esCliente && visibles.length === 0) {
+          if (soloCliente && visibles.length === 0) {
             return null;
           }
           loteIds = visibles.map((l) => l.id);

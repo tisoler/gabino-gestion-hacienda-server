@@ -39,6 +39,7 @@ Roles en Firestore (`roles/{id}`). idRol: `1=sys-admin`, `2=anfitrion`, `3=opera
 | `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote`, `escritura:balance-lote` |
 | `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
+| `cliente-base` | igual a `cliente` + `lectura:balance-lote-base` (balance resumido: subtotales sin detalle; se promueve a `cliente`) |
 
 `lectura:dieta` ve sólo dietas activas + calculadora; `escritura:dieta` ve todas las
 versiones, crea/versiona y activa/desactiva dietas enteras. `lectura:insumo` ve el
@@ -175,12 +176,15 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   insumos + tratamientos directos/masivos, cronológico DESC). `tratamiento_aplicado_lote`
   (cabecera por aplicación masiva: UNA fila = UN evento de costo; los alcance='lote'
   cuelgan de ella; imputar = por cabecera). Migración `020-veterinaria.sql` + `021`.
-- **Balance económico del lote** — `GET /lotes/:id/balance` (`lectura:balance-lote`):
+- **Balance económico del lote** — `GET /lotes/:id/balance` (`lectura:balance-lote` o
+  `lectura:balance-lote-base`; el primero se impone):
   alimentaciones que tocaron al lote (por reparto, costo = kg × costo $/kg de la versión
   a precios de referencia; insumos sin precio = 0) + tratamientos (individuales uno por
   registro, con caravana; masivos uno por cabecera, con animales por caravana) + totales
   (total / liquidado / pendiente, desde las banderas `liquidada`). `tratamiento_aplicado`
-  lleva `liquidada` (migración 022; parcial = fila por fila).
+  lleva `liquidada` (migración 022; parcial = fila por fila). Con sólo base: resumido —
+  subtotal de alimentación y subtotal de tratamientos, cada uno con su parte liquidada y
+  pendiente, sin detalle.
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
   `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por
@@ -215,6 +219,8 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 { "nombre": "operario", "permisos": ["p_lote_r", "p_lote_w", "p_corral_r", "p_dieta_r", "p_dieta_w", "p_alimento_r", "p_alimento_w", "p_insumo_r", "p_insumo_w", "p_veterinaria_r", "p_veterinaria_w", "p_balance_lote_r"] }
 // roles/4
 { "nombre": "cliente", "permisos": ["p_lote_r"] }
+// roles/5
+{ "nombre": "cliente-base", "permisos": ["p_lote_r", "p_balance_base_r"] }
 
 // permisos/p_empresa_r  { "nombre": "lectura:empresa" }
 // permisos/p_empresa_w  { "nombre": "escritura:empresa" }
@@ -234,6 +240,7 @@ Migraciones en `migrations/` (aplicar a mano, `synchronize: false`).
 // permisos/p_veterinaria_w { "nombre": "escritura:veterinaria" }
 // permisos/p_balance_lote_r { "nombre": "lectura:balance-lote" }
 // permisos/p_balance_lote_w { "nombre": "escritura:balance-lote" }
+// permisos/p_balance_base_r { "nombre": "lectura:balance-lote-base" }
 
 // usuarios/{uid}  — el bootstrap del BE (POST /usuarios/bootstrap, Admin SDK) lo crea con
 //                  { idRol: null, nombre } (sin rol, pendiente); el FE nunca escribe directo

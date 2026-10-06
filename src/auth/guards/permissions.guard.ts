@@ -11,12 +11,12 @@ export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const requiredPermission = this.reflector.get<string>(
+    const required = this.reflector.get<string | string[]>(
       "permission",
       context.getHandler(),
     );
 
-    if (!requiredPermission) {
+    if (!required || (Array.isArray(required) && required.length === 0)) {
       return true;
     }
 
@@ -27,10 +27,11 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException("Usuario no autenticado");
     }
 
-    const hasPermission = user.permisos?.includes(requiredPermission);
+    const lista = Array.isArray(required) ? required : [required];
+    const hasPermission = lista.some((p) => user.permisos?.includes(p));
 
     if (!hasPermission) {
-      throw new ForbiddenException(`No tiene permiso: ${requiredPermission}`);
+      throw new ForbiddenException(`No tiene permiso: ${lista.join(" o ")}`);
     }
 
     return true;

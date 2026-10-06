@@ -3,6 +3,8 @@ export const Roles = {
   ANFITRION: "anfitrion",
   OPERARIO: "operario",
   CLIENTE: "cliente",
+  /** Cliente nuevo: igual al cliente + lectura:balance-lote-base (resumido). */
+  CLIENTE_BASE: "cliente-base",
 } as const;
 
 /**
@@ -34,22 +36,35 @@ export type Role = (typeof Roles)[keyof typeof Roles];
 
 /**
  * idRol (roles/{id}.nombre en Firestore). La colección "roles" debe tener
- * los docs: 1=sys-admin, 2=anfitrion, 3=operario, 4=cliente.
+ * los docs: 1=sys-admin, 2=anfitrion, 3=operario, 4=cliente, 5=cliente-base.
  */
 export const ID_ROL_SYS_ADMIN = 1;
 export const ID_ROL_ANFITRION = 2;
 export const ID_ROL_OPERARIO = 3;
 export const ID_ROL_CLIENTE = 4;
+export const ID_ROL_CLIENTE_BASE = 5;
+
+/**
+ * Roles con aislamiento de cliente (sólo sus propios lotes): cliente y
+ * cliente-base (lo demás igual).
+ */
+export const ROLES_CLIENTE = [Roles.CLIENTE, Roles.CLIENTE_BASE] as const;
+
+export function esCliente(roles: string[] | undefined): boolean {
+  if (!roles || roles.length === 0) return false;
+  return roles.some((r) => (ROLES_CLIENTE as readonly string[]).includes(r));
+}
 
 /**
  * Rol asignable por sys-admin a un usuario nuevo (PATCH /usuarios/:uid/rol).
  * Un usuario se registra SIN rol (idRol: null, pendiente de asignación) y el
- * admin lo habilita como anfitrión, cliente u operario.
+ * admin lo habilita como anfitrión, cliente, cliente-base u operario.
  */
 export const ID_ROL_ASIGNABLES = [
   ID_ROL_ANFITRION,
   ID_ROL_OPERARIO,
   ID_ROL_CLIENTE,
+  ID_ROL_CLIENTE_BASE,
 ] as const;
 
 /**

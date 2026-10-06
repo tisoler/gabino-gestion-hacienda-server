@@ -121,8 +121,10 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
   de la empresa. Un **cliente** sólo ve sus propias partidas (`id_cliente = uid`).
 - **pesajes** (parte de `lotes`; fuente de verdad de los pesos, por animal):
-  `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial` (con
-  `idPartida` = por partida), `POST :id/pesajes/intermedios` y `POST :id/pesajes/final`
+  `GET /lotes/:id` incluye `pesajes[]` y `partidas[]`. `POST :id/pesajes/inicial`
+  (la partida la resuelve el server por fecha + bandera `nuevaPartida`, ver
+  **partidas**), `POST :id/pesajes/intermedios` (con `idPartida` = por partida)
+  y `POST :id/pesajes/final`
   (**varios finales por fecha** por salidas/cierres parciales) comparten la lógica:
   **candidatos = vivos del alcance (lote o `idPartida`) + los que YA tienen un pesaje de ese
   tipo en el contexto** (incluidos SALIDOS, para corregir peso/fecha). En modo `animal` se
@@ -144,11 +146,19 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   + `animal.id_partida`. El nombre ("Partida N") se deriva por orden de fecha/id. Al dar de alta
   animales, `resolverPartidaAlta(idLote)` (la decisión es **sólo del server**, sin parámetros del
   cliente): si hay una partida **ABIERTA** (algún vivo sin peso inicial) se une a ella; si no
-  (todas pesadas o ninguna) crea una nueva hoy. El peso inicial **nunca** se carga en el alta
-  (va en Pesajes). `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
+  (todas pesadas o ninguna) crea   una nueva hoy. El peso inicial **nunca** se carga en el alta
+  (va en Pesajes). Al pesar el INICIAL, `resolverPartidaInicial` decide por fecha
+  (bandera `nuevaPartida` del FE): misma fecha que otro inicial = se une a esa
+  partida (la de más animales, desempate menor id), salvo flag; distinta fecha
+  (o flag, o sin iniciales) = partida nueva con la fecha del pesaje (también la
+  primera pesada). Sólo se mueven los vivos pesados (salidos/muertos corrigen
+  pero conservan partida) y se limpian las vacías. `quitar: [animalId]` borra su
+  inicial y los saca de la partida (luego entran a otro inicial); permite guardar
+  sólo-quitados. `removeAnimal` limpia partidas vacías. Ver decisión 9 de DESIGN.
 - **corrales**: `GET /corrales` (estado derivado: libre|ocupado|enfermeria|inactivo; comunes
   con `lotesOcupantes[]`, pueden compartirse; incluye `tieneVivos` = hay animales con estado
-  sano/enfermo, para filtrar "alimentables" en el modal) ·
+  sano/enfermo (informativo: alimentar vale para cualquier común activo, la reconstrucción
+  es histórica y el guardado exige animales en el instante) ·
   `GET /corrales/mapa` (fichas por corral para el panel de Lotes; incluye `loteIds[]` de los
   lotes del común para validar drag & drop; requiere `lectura:lote`, no `lectura:corral`) ·
   `GET /corrales/enfermerias` (picker) · `POST /corrales` ·
@@ -196,7 +206,9 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   la misma tasa. Guarda snapshot: `cantidad_corral_kg` + `cantidad_enfermeria_kg` =
   `cantidad_kg`; `n_animales`/`n_animales_enfermeria` y el desglose por lote en `alimentacion_lote`.
   `GET /alimentaciones` (`lectura:alimento`) lista el histórico con filtros
-  `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta`. `PATCH /alimentaciones/:id`
+  `idCorral`/`idLote`/`idCliente`/`fechaDesde`/`fechaHasta` + paginado server
+  (`page` base 1, `pageSize` máx 100; responde `{ data, total }`) y
+  `GET /alimentaciones/filtros` (opciones encadenadas por los demás filtros). `PATCH /alimentaciones/:id`
   (`escritura:alimento`) edita `fecha`+`hora` (y opcionalmente `idDieta`, `cantidadKg`,
   `ajuste`) y **recalcula** el reparto al nuevo instante. `GET /alimentaciones/estado-corral?idCorral&fecha&hora` (`escritura:alimento`) devuelve la
   reconstrucción (por lote: común/enfermería) para precargar el modal. El alta acepta un
@@ -235,9 +247,14 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   que el server crea con la empresa del lote — insumos siempre con categoría Veterinaria,
   sin pedir escritura:insumo (igual que en dietas). Migración `020-veterinaria.sql`.
   Ver el modelo en DESIGN.
-- **balance** (en `lotes`): `GET /lotes/:id/balance` (`lectura:balance-lote`) con costos
-  (alimentaciones a precios de referencia + tratamientos a precios aplicados; masivos al
-  lote en un registro con sus animales) y totales total/liquidado/pendiente.
+- **balance** (en `lotes`): `GET /lotes/:id/balance` y `GET /lotes/balances`
+  (`lectura:balance-lote` o `lectura:balance-lote-base`; el primero se impone: con ambos se ve
+  el detalle) con costos (alimentaciones a precios de referencia + tratamientos a precios
+  aplicados; masivos al lote en un registro con sus animales) y totales total/liquidado/
+  pendiente. Con sólo base: resumido (subtotales por rubro con su parte liquidada y
+  pendiente, sin detalle). `POST /lotes/:id/liquidar` (`escritura:balance-lote`) marca
+  liquidados los ítems indicados (alimentación, tratamiento o aplicación; verificados
+  contra el lote, en transacción).
 - **insumos** (catálogo de insumos + categorías): `GET /insumos?estado=activas|todas&scope=todas|global|empresa&idEmpresa=`
   (`lectura:insumo`; `todas` requiere `escritura:insumo`; `idEmpresa` sólo sys-admin) con su
   categoría · `GET /insumos/categorias` (globales + empresa) · `POST /insumos`
@@ -253,7 +270,8 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 
 - Nombres de columnas en snake_case (`id_empresa`), entidades en camelCase.
 - Errores vía `BadRequestException`/`ForbiddenException`/`NotFoundException` (el FE muestra `message`).
-- Permisos con `@Permissions('lectura:...')` / `@Permissions('escritura:...')`; roles con `@Roles(...)`.
+- Permisos con `@Permissions('lectura:...')` / `@Permissions('escritura:...')` (varios = OR);
+  roles con `@Roles(...)`.
 
 ## Permisos de roles (Firestore)
 
@@ -263,6 +281,7 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
 | `anfitrion` | `lectura:empresa`, `escritura:empresa`, `lectura:cliente`, `escritura:cliente`, `lectura:lote`, `escritura:lote`, `lectura:corral`, `escritura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote`, `escritura:balance-lote` |
 | `operario` | `lectura:lote`, `escritura:lote`, `lectura:corral`, `lectura:dieta`, `escritura:dieta`, `lectura:alimento`, `escritura:alimento`, `lectura:salida`, `escritura:salida`, `lectura:insumo`, `escritura:insumo`, `lectura:veterinaria`, `escritura:veterinaria`, `lectura:balance-lote` |
 | `cliente` | `lectura:lote` (ve sus lotes y, en el mapa de Lotes, los corrales con animales de sus lotes; enfermería siempre) |
+| `cliente-base` | igual a `cliente` + `lectura:balance-lote-base` (balance resumido; se promueve a `cliente`) |
 
 `lectura:dieta` ve sólo dietas activas; `escritura:dieta` ve todas las versiones,
 crea/versiona y activa/desactiva dietas enteras. `lectura:alimento` ve el histórico de
@@ -276,6 +295,7 @@ directos o al lote).
 **Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w`,
 `p_insumo_r` / `p_insumo_w`, `p_veterinaria_r` / `p_veterinaria_w` y
 `p_balance_lote_r` / `p_balance_lote_w` a los roles 1 y 2 (`p_balance_lote_r` también
-al 3; `escritura:balance-lote` reservada para futuras liquidaciones).
+al 3) y crear el rol 5
+`cliente-base` (igual a cliente + `p_balance_base_r`).
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

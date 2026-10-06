@@ -8,6 +8,7 @@ import * as admin from "firebase-admin";
 import {
   ID_ROL_ANFITRION,
   ID_ROL_CLIENTE,
+  ID_ROL_CLIENTE_BASE,
   ID_ROL_OPERARIO,
 } from "src/constantes";
 import type { UsuarioBasico } from "../cache/firestore-cache.service";
@@ -124,8 +125,8 @@ export class UsuariosService {
       // promoverlo). Se borra el array idEmpresas.
       patch.idEmpresas = deleteField;
       responseData.idEmpresas = [];
-    } else if (idRol === ID_ROL_CLIENTE) {
-      // El cliente usa el array idEmpresas (relación multi-empresa).
+    } else if (idRol === ID_ROL_CLIENTE || idRol === ID_ROL_CLIENTE_BASE) {
+      // El cliente (o cliente-base) usa el array idEmpresas (multi-empresa).
       patch.idEmpresa = deleteField;
       responseData.idEmpresa = null;
     }
