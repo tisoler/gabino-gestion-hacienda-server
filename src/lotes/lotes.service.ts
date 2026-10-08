@@ -495,11 +495,13 @@ export class LotesService {
       dto.nAnimal ?? (await this.siguienteNAnimal(lote.id, undefined));
     // Partida: se une a la abierta (vivos sin pesar) o crea una nueva.
     const partida = await this.resolverPartidaAlta(lote.id);
+    const fechaIngreso = this.resolverFechaIngreso(lote, dto.fechaIngreso);
     const base = {
       idLote: lote.id,
       nAnimal,
       caravana,
       idPartida: partida.id,
+      fechaIngreso,
       idPelaje: dto.idPelaje,
       idRaza: dto.idRaza ?? null,
       idCategoria: dto.idCategoria ?? null,
@@ -532,6 +534,26 @@ export class LotesService {
   private hoyDate(): Date {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  /**
+   * Fecha de negocio de ingreso de animales al lote: la elegida al cargar
+   * (default fecha del lote), entre la fecha del lote y mañana. Base para
+   * reconstruir presencia histórica (alimentación).
+   */
+  private resolverFechaIngreso(lote: Lote, iso?: string | null): Date {
+    const base =
+      this.aDate(this.fechaIso(lote.fecha) ?? undefined) ?? this.hoyDate();
+    const f = iso ? this.aDate(iso.slice(0, 10)) : null;
+    const fecha = f ?? base;
+    const manana = this.hoyDate();
+    manana.setDate(manana.getDate() + 1);
+    if (fecha < base || fecha > manana) {
+      throw new BadRequestException(
+        "La fecha de ingreso debe estar entre la fecha del lote y mañana",
+      );
+    }
+    return fecha;
   }
 
   /** Busca o crea la partida de un lote para una fecha de carga. */
@@ -895,6 +917,8 @@ export class LotesService {
 
     // Partida de la tanda: se une a la abierta (vivos sin pesar) o crea una nueva.
     const partida = await this.resolverPartidaAlta(lote.id);
+    // Fecha de ingreso (misma para toda la tanda): default fecha del lote.
+    const fechaIngreso = this.resolverFechaIngreso(lote, dto.fechaIngreso);
 
     // BULK: 1 save de animales. El peso inicial NO se carga acá: va en Pesajes.
     const ids = await this.animalRepository.manager.transaction(async (em) => {
@@ -906,6 +930,7 @@ export class LotesService {
           nAnimal: item.nAnimal ?? next++,
           caravana: item.caravana.trim(),
           idPartida: partida.id,
+          fechaIngreso,
           idPelaje: dto.idPelaje ?? null,
           idRaza: dto.idRaza ?? null,
           idCategoria: dto.idCategoria ?? null,
@@ -987,6 +1012,9 @@ export class LotesService {
     }
     if (dto.observaciones !== undefined) {
       animal.observaciones = dto.observaciones;
+    }
+    if (dto.fechaIngreso !== undefined && dto.fechaIngreso !== null) {
+      animal.fechaIngreso = this.resolverFechaIngreso(lote, dto.fechaIngreso);
     }
 
     let estadoNuevo: string | null = null;
@@ -2046,6 +2074,7 @@ export class LotesService {
         idRaza?: number | null;
         idCategoria?: number | null;
         idPelaje?: number | null;
+        fechaIngreso?: Date;
       }
     >();
     for (const v of dto.valores) {
@@ -2060,6 +2089,9 @@ export class LotesService {
         ...(v.idRaza !== undefined ? { idRaza: v.idRaza } : {}),
         ...(v.idCategoria !== undefined ? { idCategoria: v.idCategoria } : {}),
         ...(v.idPelaje !== undefined ? { idPelaje: v.idPelaje } : {}),
+        ...(v.fechaIngreso != null
+          ? { fechaIngreso: this.resolverFechaIngreso(lote, v.fechaIngreso) }
+          : {}),
       });
     }
 
@@ -2074,6 +2106,8 @@ export class LotesService {
       if (cambios.idCategoria !== undefined)
         fila.idCategoria = cambios.idCategoria;
       if (cambios.idPelaje !== undefined) fila.idPelaje = cambios.idPelaje;
+      if (cambios.fechaIngreso !== undefined)
+        fila.fechaIngreso = cambios.fechaIngreso;
       if (Object.keys(fila).length === 0) continue;
       const clave = JSON.stringify(fila, Object.keys(fila).sort());
       const grupo = grupos.get(clave) ?? { fila, ids: [] };

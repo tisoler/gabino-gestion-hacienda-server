@@ -99,4 +99,12 @@ export class UpdateAnimalDto {
   @IsOptional()
   @Matches(/^(\d{2}):(\d{2})(:\d{2})?$/)
   hora?: string;
+
+  /**
+   * Fecha de negocio de ingreso al lote (corrección manual).
+   * Rango válido: [fecha del lote, mañana].
+   */
+  @IsOptional()
+  @IsDateString()
+  fechaIngreso?: string;
 }

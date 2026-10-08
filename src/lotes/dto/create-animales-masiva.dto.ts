@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
+  IsDateString,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -61,6 +62,14 @@ export class CreateAnimalesMasivaDto {
   @Min(1)
   @Max(500)
   cantidad: number;
+
+  /**
+   * Fecha de negocio de ingreso al lote (misma para toda la tanda).
+   * Default: fecha del lote. Rango válido: [fecha del lote, mañana].
+   */
+  @IsOptional()
+  @IsDateString()
+  fechaIngreso?: string;
 
   @IsOptional()
   @IsString()

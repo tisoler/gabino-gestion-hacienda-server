@@ -94,6 +94,12 @@ a su empresa (`POST /clientes`). El anfitrión crea su empresa en "Mi Empresa"
   excepción de enfermería; la ubicación efectiva del animal es `id_corral_enfermeria ??
   lote.id_corral` (derivada). Y `id_raza`/`id_categoria` (FKs a los catálogos, nullable).
   **El sexo ya no es columna del animal: se INFIERE de la categoría** (`categoria.sexo`).
+  `fecha_ingreso` (DATE, negocio, NOT NULL): fecha en que el animal ingresó al lote
+  (la elige el usuario al cargar, default fecha del lote, rango [fecha del lote, mañana];
+  editable después por animal o en masa). Es la base para reconstruir presencia histórica
+  (alimentación): NO se usa `partida.fecha` (las partidas se reordenan en los pesajes
+  iniciales) ni `created_at`. Backfill 023: `created_at::date` (si hubo cargas tardías,
+  corregir a mano).
 - `pesaje` — serie temporal de pesos, la FUENTE DE VERDAD: `id`, `id_animal` FK, `fecha` DATE,
   `tipo` (`inicial`|`intermedio`|`final`), `peso` NUMERIC, `desbaste` NUMERIC (opcional, default
   0), `peso_neto` (denormalizado = peso − desbaste), timestamps. Un pesaje es SIEMPRE por

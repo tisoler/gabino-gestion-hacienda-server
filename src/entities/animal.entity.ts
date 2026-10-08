@@ -66,6 +66,15 @@ export class Animal {
   @Column({ type: "varchar", length: 50, nullable: true })
   caravana: string | null;
 
+  /**
+   * Fecha de negocio de ingreso al lote (la elige el usuario al cargar;
+   * default fecha del lote, entre la fecha del lote y mañana). Base para
+   * reconstruir presencia histórica (alimentación): no se usa `partida.fecha`
+   * (las partidas se reordenan en los pesajes iniciales) ni `created_at`.
+   */
+  @Column({ name: "fecha_ingreso", type: "date" })
+  fechaIngreso: Date;
+
   @Column({ name: "id_pelaje", type: "int", nullable: true })
   idPelaje: number | null;
 

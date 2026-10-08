@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
+  IsDateString,
   IsIn,
   IsInt,
   IsOptional,
@@ -12,7 +13,8 @@ import {
 
 /**
  * Cambios por animal para la edición masiva. Campo ausente = no cambia;
- * `null` = limpia el valor; número = setea (catálogo validado por el server).
+ * `null` = limpia el valor (sólo catálogos); número = setea (catálogo validado
+ * por el server). `fechaIngreso` ausente/null = no cambia (nunca se limpia).
  */
 export class ValorAnimalMasivoDto {
   @IsInt()
@@ -36,6 +38,12 @@ export class ValorAnimalMasivoDto {
   @IsInt()
   @Min(1)
   idPelaje?: number | null;
+
+  /** Fecha de negocio de ingreso al lote (rango: [fecha del lote, mañana]). */
+  @IsOptional()
+  @ValidateIf((o) => o.fechaIngreso != null)
+  @IsDateString()
+  fechaIngreso?: string | null;
 }
 
 export class EdicionMasivaDto {

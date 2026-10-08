@@ -1,6 +1,7 @@
 import {
   IsIn,
   IsInt,
+  IsDateString,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -66,4 +67,12 @@ export class CreateAnimalDto {
   @IsString()
   @MaxLength(150)
   motivo?: string;
+
+  /**
+   * Fecha de negocio de ingreso al lote. Default: fecha del lote.
+   * Rango válido: [fecha del lote, mañana].
+   */
+  @IsOptional()
+  @IsDateString()
+  fechaIngreso?: string;
 }

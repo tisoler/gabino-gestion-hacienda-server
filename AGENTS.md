@@ -109,13 +109,15 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `PATCH /lotes/:id` · `POST /lotes/:id/animales` (`caravana` + `idPelaje` requeridos;
   `idRaza`/`idCategoria` opcionales; `nAnimal` auto = último del lote + 1) ·
   `POST /lotes/:id/animales/masiva` (carga masiva: raza/pelaje/categoría **opcionales**,
-  cantidad + caravanas; la partida la decide el server y el peso inicial se carga en Pesajes) ·
-  `POST /lotes/:id/animales/edicion-masiva` (raza/categoría/pelaje por animal del lote o de
-  una partida: `{ alcance, idPartida?, valores: [{animalId, idRaza?, idCategoria?, idPelaje?}] }`
-  con campo ausente = no cambia, `null` = limpia, número = setea; catálogos validados;
+  cantidad + caravanas + `fechaIngreso` (default fecha del lote, rango [fecha del lote, mañana]);
+  la partida la decide el server y el peso inicial se carga en Pesajes) ·
+  `POST /lotes/:id/animales/edicion-masiva` (raza/categoría/pelaje/`fechaIngreso` por animal del lote o de
+  una partida: `{ alcance, idPartida?, valores: [{animalId, idRaza?, idCategoria?, idPelaje?, fechaIngreso?}] }`
+  con campo ausente = no cambia, `null` = limpia (sólo catálogos; la fecha nunca se limpia),
+  número = setea, fecha validada contra [fecha del lote, mañana]; catálogos validados;
   bulk por cambio idéntico (un UPDATE por grupo) en transacción) ·
   `PATCH /lotes/:id/animales/:animalId` (incluye `estado` + `idMotivo`/`motivo` para el
-  historial) · `DELETE /lotes/:id/animales/:animalId` ·
+  historial, y `fechaIngreso` para correcciones manuales) · `DELETE /lotes/:id/animales/:animalId` ·
   `POST /lotes/:id/animales/:animalId/enfermeria` (motivo obligatorio → estado 'enfermo') ·
   `DELETE .../enfermeria` (body: estado 'sano'|'muerto' + causa opcional/obligatoria) ·
   `GET .../movimientos` (historial, fecha DESC). `idCliente` admite **cliente o anfitrión**
@@ -200,8 +202,9 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   alimentan a través del corral de su lote). Cada fila tiene **instante T = fecha + hora**
   (default 12:00). La `cantidadKg` es la del CORRAL y se reparte por fila. **Los animales del
   corral se RECONSTRUYEN al instante T** (`estadoCorralEn`): lotes del corral en T vía
-  `lote_corral_asignacion` (query de intervalos) y, por animal, vivo en T (existía, no salió ni
-  murió antes de T) y en común o en enfermería según el último `animal_movimiento` ≤ T. Tasa =
+  `lote_corral_asignacion` (query de intervalos) y, por animal, vivo en T (`fecha_ingreso` ≤ T,
+  no salió ni murió antes de T) y en común o en enfermería según el último `animal_movimiento` ≤ T
+  (no se usa `partida.fecha`). Tasa =
   cantidad / vivos en el común (común); los del lote en ENFERMERÍA suman una ESTIMACIÓN extra a
   la misma tasa. Guarda snapshot: `cantidad_corral_kg` + `cantidad_enfermeria_kg` =
   `cantidad_kg`; `n_animales`/`n_animales_enfermeria` y el desglose por lote en `alimentacion_lote`.

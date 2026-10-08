@@ -632,9 +632,11 @@ export class AlimentacionService {
   /**
    * Reconstruye la composición del corral en el instante T (fecha+hora):
    *  - lotes del corral en T → query de intervalos `lote_corral_asignacion`;
-   *  - por animal: ingresó (`partida.fecha`, o `lote.fecha` si no tiene
-   *    partida), vivo en T (no salió ni murió antes de T) y en común o en
-   *    enfermería según el último movimiento ≤ T.
+   *  - por animal: ingresó (`animal.fecha_ingreso`, negocio elegido al cargar;
+   *    fallback fecha del lote y `created_at`), vivo en T (no salió ni murió
+   *    antes de T) y en común o en enfermería según el último movimiento ≤ T.
+   * NOTA: no se usa `partida.fecha` (las partidas se reordenan en los pesajes
+   * iniciales y no representan el ingreso).
    * Devuelve por lote: nAnimales (común) y nAnimalesEnfermeria.
    */
   private async estadoCorralEn(
@@ -660,18 +662,6 @@ export class AlimentacionService {
     });
     if (animales.length === 0) return [];
     const ids = animales.map((a) => a.id);
-    const partidaIds = Array.from(
-      new Set(
-        animales
-          .map((a) => a.idPartida)
-          .filter((id): id is number => id != null),
-      ),
-    );
-    const partidas =
-      partidaIds.length > 0
-        ? await this.partidaRepository.find({ where: { id: In(partidaIds) } })
-        : [];
-    const partidaFecha = new Map(partidas.map((p) => [p.id, p.fecha]));
 
     const movs = await this.movimientoRepository.find({
       where: { idAnimal: In(ids) },
@@ -701,14 +691,14 @@ export class AlimentacionService {
     const comun = new Map<number, number>();
     const enf = new Map<number, number>();
     for (const a of animales) {
-      // Ingreso de negocio: fecha de su partida, o del lote si no tiene.
-      const fechaIngreso =
-        (a.idPartida != null ? partidaFecha.get(a.idPartida) : null) ??
-        loteById.get(a.idLote)?.fecha ??
+      // Ingreso de negocio: fecha_ingreso del animal (fallbacks históricos).
+      const ingresoIso =
+        this.fechaIso(a.fechaIngreso) ||
+        this.fechaIso(loteById.get(a.idLote)?.fecha ?? null) ||
         null;
       const inicio =
-        fechaIngreso != null
-          ? this.instanteDe(fechaIngreso, "00:00:00")
+        ingresoIso != null
+          ? this.instanteDe(ingresoIso, "00:00:00")
           : a.createdAt;
       if (!(inicio <= T)) continue; // el animal todavía no había ingresado
       const ms = movByAnimal.get(a.id) ?? [];
