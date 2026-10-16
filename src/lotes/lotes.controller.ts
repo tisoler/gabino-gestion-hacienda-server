@@ -28,6 +28,7 @@ import { EnviarEnfermeriaDto } from "./dto/enviar-enfermeria.dto";
 import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { LiquidarBalanceDto } from "./dto/liquidar-balance.dto";
+import { ImputarCostoDto } from "./dto/imputar-costo.dto";
 import { CreateSalidaDto } from "./dto/create-salida.dto";
 import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
@@ -252,13 +253,14 @@ export class LotesController {
   }
 
   @Post(":id/liquidar")
-  @Permissions("escritura:balance-lote")
+  @Permissions("escritura:liquidacion")
   @ApiOperation({
-    summary: "Liquidar ítems del balance (los marca liquidados)",
+    summary: "Generar una liquidación del lote (congela precios)",
     description:
-      "Alimentaciones, tratamientos individuales o aplicaciones al lote " +
-      "(marca todos sus detalles). Cada ítem se verifica contra el lote; " +
-      "todo en una transacción.",
+      "Crea la cabecera + líneas con precios congelados (editables al " +
+      "liquidar; si no vienen, referencias vivas), imputa los costos nuevos " +
+      "(nacen liquidados) y marca `liquidada` en cada evento. Todo verificado " +
+      "contra el lote, en una transacción.",
   })
   @ApiParam({ name: "id", type: Number, description: "ID del lote" })
   liquidar(
@@ -266,7 +268,24 @@ export class LotesController {
     @Body() dto: LiquidarBalanceDto,
     @Request() req,
   ) {
-    return this.lotesService.liquidar(id, dto.items, req.user);
+    return this.lotesService.liquidar(id, dto, req.user);
+  }
+
+  @Post(":id/costos")
+  @Permissions("escritura:balance-lote")
+  @ApiOperation({
+    summary: "Imputar un costo vario pendiente al lote",
+    description:
+      "El costo puede ser existente (`idCosto`) o nuevo por `nombre` (se " +
+      "crea en la empresa). Queda pendiente en el balance hasta liquidarse.",
+  })
+  @ApiParam({ name: "id", type: Number, description: "ID del lote" })
+  imputarCosto(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ImputarCostoDto,
+    @Request() req,
+  ) {
+    return this.lotesService.imputarCosto(id, dto, req.user);
   }
 
   @Post(":id/salidas")

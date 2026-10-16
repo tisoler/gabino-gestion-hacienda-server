@@ -298,7 +298,8 @@ export class TratamientosService {
               idMovimiento: null,
               idAplicacionLote: cab.id,
               idTratamiento: r.idTratamiento,
-              precio: r.precio,
+              // El precio NO se guarda al aplicar: se congela al liquidar.
+              precio: null,
               fecha,
               hora,
               alcance: "lote",
@@ -320,7 +321,8 @@ export class TratamientosService {
               filasIt.push({
                 idTratamientoAplicado: idsAp[k],
                 idInsumo: i.idInsumo,
-                precio: i.precio,
+                // El precio NO se guarda al aplicar: se congela al liquidar.
+                precio: null,
               });
             }
             k++;
@@ -523,11 +525,7 @@ export class TratamientosService {
             params.empresaId,
           );
         }
-        if (reg.precio !== undefined) {
-          existente.precio =
-            reg.precio ??
-            (await this.referenciaTratamiento(existente.idTratamiento));
-        }
+        // El precio NO se actualiza al editar: se congela al liquidar.
         await this.aplicadoRepository.save(existente);
         await this.aplicadoInsumoRepository.delete({
           idTratamientoAplicado: existente.id,
@@ -542,7 +540,8 @@ export class TratamientosService {
               this.aplicadoInsumoRepository.create({
                 idTratamientoAplicado: existente.id,
                 idInsumo: i.idInsumo,
-                precio: i.precio,
+                // El precio NO se guarda al aplicar: se congela al liquidar.
+                precio: null,
               }),
             ),
           );
@@ -598,7 +597,8 @@ export class TratamientosService {
             idAnimal: animal.id,
             idMovimiento: params.idMovimiento,
             idTratamiento: r.idTratamiento,
-            precio: r.precio,
+            // El precio NO se guarda al aplicar: se congela al liquidar.
+            precio: null,
             fecha: params.fecha,
             hora: params.hora,
             alcance: params.alcance,
@@ -611,7 +611,8 @@ export class TratamientosService {
               this.aplicadoInsumoRepository.create({
                 idTratamientoAplicado: ap.id,
                 idInsumo: i.idInsumo,
-                precio: i.precio,
+                // El precio NO se guarda al aplicar: se congela al liquidar.
+                precio: null,
               }),
             ),
           );

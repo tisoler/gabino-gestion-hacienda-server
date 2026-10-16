@@ -23,6 +23,8 @@ import { TraerEnfermeriaDto } from "./dto/traer-enfermeria.dto";
 import { CargarPesajesDto, EditarPesajeDto } from "./dto/pesajes.dto";
 import { CreateSalidaDto } from "./dto/create-salida.dto";
 import { EdicionMasivaDto } from "./dto/edicion-masiva.dto";
+import { LiquidarBalanceDto } from "./dto/liquidar-balance.dto";
+import { ImputarCostoDto } from "./dto/imputar-costo.dto";
 import { Salida } from "../entities/salida.entity";
 import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { LoteCorralAsignacion } from "../entities/lote-corral-asignacion.entity";
@@ -38,6 +40,9 @@ import {
   TratamientoAplicado,
   TratamientoAplicadoLote,
 } from "../entities/tratamiento.entity";
+import { CostoAplicado } from "../entities/costo.entity";
+import { Liquidacion, LiquidacionItem } from "../entities/liquidacion.entity";
+import { CostosService } from "../costos/costos.service";
 
 export interface LoteResumen {
   id: number;
@@ -88,20 +93,45 @@ export interface BalanceTratamientoRow {
   /** Sólo alcance lote. */
   nAnimales?: number;
   animales?: { id: number; caravana: string | null }[];
-  /** Suma de precios aplicados (tratamiento + insumos). */
+  /** Precio base del tratamiento (congelado si liquidada, referencia viva si no). */
+  precioBase: number | null;
+  /** Insumos del aplicado (congelados si liquidada, referencias vivas si no). */
+  insumos: { id: number | null; nombre: string; precio: number | null }[];
+  /** Sólo alcance lote: aplicados miembros (para expandir por animal). */
+  aplicados?: {
+    id: number;
+    caravana: string | null;
+    nombre: string;
+    precioBase: number | null;
+    costo: number;
+    liquidada: boolean;
+    insumos: { id: number | null; nombre: string; precio: number | null }[];
+  }[];
+  /** Suma base + insumos. */
   costo: number;
+  liquidada: boolean;
+}
+
+export interface BalanceCostoRow {
+  id: number;
+  fecha: string;
+  costoNombre: string;
+  descripcion: string;
+  monto: number;
   liquidada: boolean;
 }
 
 export interface BalanceView {
   alimentaciones: BalanceAlimentacionRow[];
   tratamientos: BalanceTratamientoRow[];
+  costos: BalanceCostoRow[];
   totales: { total: number; liquidado: number; pendiente: number };
 }
 
 export interface BalanceSubtotales {
   alimentacion: { liquidado: number; pendiente: number };
   tratamientos: { liquidado: number; pendiente: number };
+  costos: { liquidado: number; pendiente: number };
 }
 
 export interface BalanceResumido extends BalanceSubtotales {
@@ -123,6 +153,7 @@ export interface BalanceLoteResumen {
   desglose?: {
     alimentacion: { liquidado: number; pendiente: number };
     tratamientos: { liquidado: number; pendiente: number };
+    costos: { liquidado: number; pendiente: number };
   };
 }
 
@@ -162,6 +193,13 @@ export class LotesService {
     private tratamientoAplicadoRepository: Repository<TratamientoAplicado>,
     @InjectRepository(TratamientoAplicadoLote)
     private tratamientoAplicadoLoteRepository: Repository<TratamientoAplicadoLote>,
+    @InjectRepository(CostoAplicado)
+    private costoAplicadoRepository: Repository<CostoAplicado>,
+    @InjectRepository(Liquidacion)
+    private liquidacionRepository: Repository<Liquidacion>,
+    @InjectRepository(LiquidacionItem)
+    private liquidacionItemRepository: Repository<LiquidacionItem>,
+    private costos: CostosService,
   ) {}
 
   /**
@@ -1290,6 +1328,29 @@ export class LotesService {
   }
 
   /**
+   * Líneas congeladas de las liquidaciones de un lote, agrupadas por
+   * `tipo:idReferencia`. El balance las usa cuando el ítem está liquidado;
+   * cuando no, usa referencias vivas.
+   */
+  private async lineasCongeladasDeLote(
+    idLote: number,
+  ): Promise<Map<string, LiquidacionItem[]>> {
+    const items = await this.liquidacionItemRepository
+      .createQueryBuilder("i")
+      .innerJoin("i.liquidacion", "l")
+      .where("l.id_lote = :lote", { lote: idLote })
+      .getMany();
+    const mapa = new Map<string, LiquidacionItem[]>();
+    for (const it of items) {
+      const k = `${it.tipo}:${it.idReferencia}`;
+      const lista = mapa.get(k) ?? [];
+      lista.push(it);
+      mapa.set(k, lista);
+    }
+    return mapa;
+  }
+
+  /**
    * Balance económico del lote. Con `lectura:balance-lote` devuelve el
    * detalle completo; con sólo `lectura:balance-lote-base`, el resumido
    * (subtotales por rubro, sin detalle por evento).
@@ -1303,6 +1364,9 @@ export class LotesService {
     }
     const lote = await this.getLoteVerificado(idLote, user);
     const r2 = (n: number) => Math.round(n * 100) / 100;
+    // Líneas congeladas de liquidaciones del lote (por `tipo:idReferencia`):
+    // el balance las usa cuando el ítem está liquidado.
+    const congeladas = await this.lineasCongeladasDeLote(lote.id);
 
     // --- Alimentaciones que tocaron al lote (por reparto) ---
     const filasAl = await this.alimentacionLoteRepository.find({
@@ -1362,7 +1426,17 @@ export class LotesService {
           dietaVersion: al?.dietaVersion?.version ?? 0,
           cantidadKg: r2(cantidadKg),
           nAnimales,
-          costo: r2(cantidadKg * unit),
+          // Liquidada: costo congelado al liquidar; si no, referencia viva.
+          costo:
+            (al?.liquidada ?? false) &&
+            (congeladas.get(`alimentacion:${idAl}`) ?? []).length > 0
+              ? r2(
+                  (congeladas.get(`alimentacion:${idAl}`) ?? []).reduce(
+                    (acc, l) => acc + Number(l.costo),
+                    0,
+                  ),
+                )
+              : r2(cantidadKg * unit),
           liquidada: al?.liquidada ?? false,
         };
       })
@@ -1390,16 +1464,65 @@ export class LotesService {
       animalIds.length > 0
         ? await this.tratamientoAplicadoRepository.find({
             where: { idAnimal: In(animalIds) },
-            relations: ["tratamiento", "insumos", "aplicacionLote"],
+            relations: [
+              "tratamiento",
+              "insumos",
+              "insumos.insumo",
+              "aplicacionLote",
+            ],
             order: { fecha: "DESC", hora: "DESC", id: "DESC" },
           })
         : [];
-    const costoAplicado = (a: TratamientoAplicado): number =>
-      (a.precio == null ? 0 : Number(a.precio)) +
-      (a.insumos ?? []).reduce(
-        (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
-        0,
-      );
+    // Costo vivo de un aplicado: referencias actuales (tratamiento + insumos).
+    const baseViva = (a: TratamientoAplicado): number =>
+      a.tratamiento?.precioReferencia == null
+        ? 0
+        : Number(a.tratamiento.precioReferencia);
+    const insumosVivos = (
+      a: TratamientoAplicado,
+    ): { id: number | null; nombre: string; precio: number | null }[] =>
+      (a.insumos ?? []).map((i) => ({
+        id: i.id,
+        nombre: i.insumo?.nombre ?? "",
+        precio:
+          i.insumo?.precioReferencia == null
+            ? null
+            : Number(i.insumo.precioReferencia),
+      }));
+    const lineasDeAplicado = (
+      a: TratamientoAplicado,
+    ): {
+      precioBase: number | null;
+      insumos: { id: number | null; nombre: string; precio: number | null }[];
+      costo: number;
+    } => {
+      if (a.liquidada ?? false) {
+        const lineas = congeladas.get(`tratamiento:${a.id}`) ?? [];
+        const base = lineas.find((l) => l.concepto === "tratamiento");
+        const ins = lineas
+          .filter((l) => l.concepto === "insumo")
+          .map((l) => ({
+            id: null as number | null,
+            nombre: l.etiqueta,
+            precio: l.precio == null ? null : Number(l.precio),
+          }));
+        return {
+          precioBase: base?.precio == null ? null : Number(base.precio),
+          insumos: ins,
+          costo: r2(
+            (base ? Number(base.costo) : 0) +
+              ins.reduce((acc, x) => acc + (x.precio ?? 0), 0),
+          ),
+        };
+      }
+      const ins = insumosVivos(a);
+      const base = baseViva(a);
+      return {
+        precioBase: base,
+        insumos: ins,
+        costo: r2(base + ins.reduce((acc, x) => acc + (x.precio ?? 0), 0)),
+      };
+    };
     const porAplicacion = new Map<number, TratamientoAplicado[]>();
     const individuales: TratamientoAplicado[] = [];
     for (const a of aplicados) {
@@ -1412,16 +1535,21 @@ export class LotesService {
       }
     }
     const tratamientos: BalanceTratamientoRow[] = [
-      ...individuales.map((a): BalanceTratamientoRow => ({
-        kind: "animal",
-        id: a.id,
-        fecha: this.fechaIso(a.fecha) ?? "",
-        hora: (a.hora ?? "12:00:00").slice(0, 8),
-        nombres: [a.tratamiento?.nombre ?? ""],
-        caravana: caravanaPorAnimal.get(a.idAnimal) ?? null,
-        costo: r2(costoAplicado(a)),
-        liquidada: a.liquidada ?? false,
-      })),
+      ...individuales.map((a): BalanceTratamientoRow => {
+        const lin = lineasDeAplicado(a);
+        return {
+          kind: "animal",
+          id: a.id,
+          fecha: this.fechaIso(a.fecha) ?? "",
+          hora: (a.hora ?? "12:00:00").slice(0, 8),
+          nombres: [a.tratamiento?.nombre ?? ""],
+          caravana: caravanaPorAnimal.get(a.idAnimal) ?? null,
+          precioBase: lin.precioBase,
+          insumos: lin.insumos,
+          costo: lin.costo,
+          liquidada: a.liquidada ?? false,
+        };
+      }),
       ...[...porAplicacion.entries()].map(
         ([idAplicacion, filas]): BalanceTratamientoRow => {
           const cab = filas[0].aplicacionLote;
@@ -1429,7 +1557,19 @@ export class LotesService {
             new Set(filas.map((f) => f.tratamiento?.nombre ?? "")),
           );
           const idsAnimales = Array.from(new Set(filas.map((f) => f.idAnimal)));
-          const costo = filas.reduce((acc, f) => acc + costoAplicado(f), 0);
+          const det = filas.map((f) => {
+            const lin = lineasDeAplicado(f);
+            return {
+              id: f.id,
+              caravana: caravanaPorAnimal.get(f.idAnimal) ?? null,
+              nombre: f.tratamiento?.nombre ?? "",
+              precioBase: lin.precioBase,
+              costo: lin.costo,
+              liquidada: f.liquidada ?? false,
+              insumos: lin.insumos,
+            };
+          });
+          const costo = r2(det.reduce((acc, d) => acc + d.costo, 0));
           return {
             kind: "lote",
             id: idAplicacion,
@@ -1447,7 +1587,10 @@ export class LotesService {
                   numeric: true,
                 }),
               ),
-            costo: r2(costo),
+            precioBase: null,
+            insumos: [],
+            aplicados: det,
+            costo,
             liquidada: filas.every((f) => f.liquidada ?? false),
           };
         },
@@ -1464,17 +1607,35 @@ export class LotesService {
               : b.id - a.id,
     );
 
+    // --- Costos varios imputados al lote ---
+    const costosAplicados = await this.costoAplicadoRepository.find({
+      where: { idLote: lote.id },
+      relations: ["costo"],
+      order: { fecha: "DESC", id: "DESC" },
+    });
+    const costos: BalanceCostoRow[] = costosAplicados.map((c) => ({
+      id: c.id,
+      fecha: this.fechaIso(c.fecha) ?? "",
+      costoNombre: c.costo?.nombre ?? "",
+      descripcion: c.descripcion ?? "",
+      monto: Number(c.monto),
+      liquidada: c.liquidada ?? false,
+    }));
+
     const total = r2(
       alimentaciones.reduce((acc, a) => acc + a.costo, 0) +
-        tratamientos.reduce((acc, t) => acc + t.costo, 0),
+        tratamientos.reduce((acc, t) => acc + t.costo, 0) +
+        costos.reduce((acc, c) => acc + c.monto, 0),
     );
     const liquidado = r2(
       alimentaciones.reduce((acc, a) => acc + (a.liquidada ? a.costo : 0), 0) +
-        tratamientos.reduce((acc, t) => acc + (t.liquidada ? t.costo : 0), 0),
+        tratamientos.reduce((acc, t) => acc + (t.liquidada ? t.costo : 0), 0) +
+        costos.reduce((acc, c) => acc + (c.liquidada ? c.monto : 0), 0),
     );
     return {
       alimentaciones,
       tratamientos,
+      costos,
       totales: { total, liquidado, pendiente: r2(total - liquidado) },
     };
   }
@@ -1494,8 +1655,13 @@ export class LotesService {
       sub.alimentacion.liquidado +
       sub.alimentacion.pendiente +
       sub.tratamientos.liquidado +
-      sub.tratamientos.pendiente;
-    const liquidado = sub.alimentacion.liquidado + sub.tratamientos.liquidado;
+      sub.tratamientos.pendiente +
+      sub.costos.liquidado +
+      sub.costos.pendiente;
+    const liquidado =
+      sub.alimentacion.liquidado +
+      sub.tratamientos.liquidado +
+      sub.costos.liquidado;
     return {
       ...sub,
       totales: { total, liquidado, pendiente: total - liquidado },
@@ -1520,9 +1686,13 @@ export class LotesService {
           sub.alimentacion.liquidado +
           sub.alimentacion.pendiente +
           sub.tratamientos.liquidado +
-          sub.tratamientos.pendiente;
+          sub.tratamientos.pendiente +
+          sub.costos.liquidado +
+          sub.costos.pendiente;
         const liquidado =
-          sub.alimentacion.liquidado + sub.tratamientos.liquidado;
+          sub.alimentacion.liquidado +
+          sub.tratamientos.liquidado +
+          sub.costos.liquidado;
         out.push({
           idLote: l.id,
           loteNombre: l.nombre,
@@ -1537,6 +1707,7 @@ export class LotesService {
           desglose: {
             alimentacion: sub.alimentacion,
             tratamientos: sub.tratamientos,
+            costos: sub.costos,
           },
         });
       } else {
@@ -2548,77 +2719,436 @@ export class LotesService {
   }
 
   /**
-   * Liquida ítems del balance (los marca `liquidada`): alimentaciones,
-   * tratamientos individuales o aplicaciones al lote (marca todos sus
-   * detalles). Todo verificado contra el lote + transacción atómica.
+   * Genera una liquidación del lote ("lote de ítems pagados"): crea la
+   * cabecera + las líneas con precios CONGELADOS (editables al liquidar; si
+   * no vienen, referencias vivas del momento), imputa los costos nuevos
+   * (nacen liquidados) y marca `liquidada` en cada evento. Todo verificado
+   * contra el lote + transacción atómica.
    */
   async liquidar(
     idLote: number,
-    items: { tipo: string; id: number }[],
+    dto: LiquidarBalanceDto,
     user: any,
-  ): Promise<{ liquidados: number }> {
+  ): Promise<{ idLiquidacion: number; total: number; items: number }> {
     const lote = await this.getLoteVerificado(idLote, user);
-    let liquidados = 0;
-    await this.alimentacionLoteRepository.manager.transaction(async (em) => {
+    const fechaLiq = this.aDate(dto.fecha);
+    if (!fechaLiq)
+      throw new BadRequestException("Fecha de liquidación inválida");
+    const items = dto.items ?? [];
+    const nuevos = dto.costosNuevos ?? [];
+    if (items.length === 0 && nuevos.length === 0) {
+      throw new BadRequestException("Seleccioná al menos un ítem a liquidar");
+    }
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const refNum = (v: unknown): number =>
+      v == null || isNaN(Number(v)) ? 0 : Number(v);
+
+    return this.liquidacionRepository.manager.transaction(async (em) => {
+      const liqRepo = em.getRepository(Liquidacion);
+      const itemRepo = em.getRepository(LiquidacionItem);
+      const liq = await liqRepo.save(
+        liqRepo.create({
+          idEmpresa: lote.idEmpresa,
+          idLote: lote.id,
+          fecha: fechaLiq,
+          total: 0,
+          idUsuario: user?.id ?? null,
+        }),
+      );
+      const filas: Partial<LiquidacionItem>[] = [];
+      let total = 0;
+      const push = (f: {
+        tipo: string;
+        idReferencia: number;
+        concepto: string;
+        etiqueta: string;
+        cantidad?: number | null;
+        precio?: number | null;
+        costo: number;
+      }) => {
+        filas.push({ idLiquidacion: liq.id, ...f });
+        total = r2(total + f.costo);
+      };
+
+      // Costos nuevos: catálogo (existente o alta inline) + imputación al
+      // lote que nace liquidada (bloqueada, no deseleccionable).
+      const costoApRepo = em.getRepository(CostoAplicado);
+      for (const c of nuevos) {
+        const cat = await this.costos.resolverCosto(
+          { idCosto: c.idCosto, nombre: c.nombre },
+          lote.idEmpresa,
+        );
+        let fechaCosto = fechaLiq;
+        if (c.fecha) {
+          const f = this.aDate(c.fecha);
+          if (!f) throw new BadRequestException("Fecha de costo inválida");
+          fechaCosto = f;
+        }
+        const aplicado = await costoApRepo.save(
+          costoApRepo.create({
+            idCosto: cat.id,
+            idLote: lote.id,
+            idEmpresa: lote.idEmpresa,
+            fecha: fechaCosto,
+            descripcion: c.descripcion?.trim() || cat.nombre,
+            monto: r2(Number(c.monto)),
+            liquidada: true,
+            idUsuario: user?.id ?? null,
+          }),
+        );
+        push({
+          tipo: "costo",
+          idReferencia: aplicado.id,
+          concepto: "costo",
+          etiqueta: aplicado.descripcion,
+          precio: Number(aplicado.monto),
+          costo: Number(aplicado.monto),
+        });
+      }
+
       for (const it of items ?? []) {
         if (it.tipo === "alimentacion") {
-          const toca = await em
-            .getRepository(AlimentacionLote)
-            .findOne({ where: { idAlimentacion: it.id, idLote: lote.id } });
-          if (!toca) {
+          const toca = await em.getRepository(AlimentacionLote).find({
+            where: { idAlimentacion: it.id, idLote: lote.id },
+            relations: [
+              "alimentacion",
+              "alimentacion.dieta",
+              "alimentacion.dietaVersion",
+            ],
+          });
+          if (toca.length === 0) {
             throw new BadRequestException(
               "Una alimentación no pertenece al lote",
             );
           }
+          const al = toca[0].alimentacion;
+          if (al.liquidada) {
+            throw new BadRequestException("Una alimentación ya está liquidada");
+          }
+          let kg = 0;
+          for (const f of toca) {
+            kg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
+          }
+          const precioKg =
+            it.precio ?? (await this.costoKgDeVersion(al.idDietaVersion));
+          const costo = r2(kg * precioKg);
+          push({
+            tipo: "alimentacion",
+            idReferencia: al.id,
+            concepto: "evento",
+            etiqueta: `Alimentación · ${al.dieta?.nombre ?? ""} (v${al.dietaVersion?.version ?? 0})`,
+            cantidad: r2(kg),
+            precio: r2(precioKg),
+            costo,
+          });
           await em
             .getRepository(Alimentacion)
-            .update({ id: it.id }, { liquidada: true });
-          liquidados += 1;
+            .update({ id: al.id }, { liquidada: true });
         } else if (it.tipo === "tratamiento") {
-          const ap = await em.getRepository(TratamientoAplicado).findOne({
+          const apRepo = em.getRepository(TratamientoAplicado);
+          const ap = await apRepo.findOne({
             where: { id: it.id },
-            relations: ["animal"],
+            relations: ["animal", "tratamiento", "insumos", "insumos.insumo"],
           });
           if (!ap || ap.animal?.idLote !== lote.id) {
             throw new BadRequestException(
               "Un tratamiento no pertenece al lote",
             );
           }
-          await em
-            .getRepository(TratamientoAplicado)
-            .update({ id: it.id }, { liquidada: true });
-          liquidados += 1;
-        } else if (it.tipo === "aplicacion") {
-          const cab = await em.getRepository(TratamientoAplicadoLote).findOne({
+          if (ap.liquidada) {
+            throw new BadRequestException("Un tratamiento ya está liquidado");
+          }
+          const base = it.precio ?? refNum(ap.tratamiento?.precioReferencia);
+          push({
+            tipo: "tratamiento",
+            idReferencia: ap.id,
+            concepto: "tratamiento",
+            etiqueta: ap.tratamiento?.nombre ?? "Tratamiento",
+            precio: r2(base),
+            costo: r2(base),
+          });
+          const preciosIns = new Map(
+            (it.insumos ?? []).map((i) => [i.id, Number(i.precio)]),
+          );
+          for (const ai of ap.insumos ?? []) {
+            const p = preciosIns.has(ai.id)
+              ? (preciosIns.get(ai.id) as number)
+              : refNum(ai.insumo?.precioReferencia);
+            push({
+              tipo: "tratamiento",
+              idReferencia: ap.id,
+              concepto: "insumo",
+              etiqueta: ai.insumo?.nombre ?? "Insumo",
+              precio: r2(p),
+              costo: r2(p),
+            });
+          }
+          await apRepo.update({ id: ap.id }, { liquidada: true });
+        } else if (it.tipo === "costo") {
+          const ca = await costoApRepo.findOne({
             where: { id: it.id, idLote: lote.id },
           });
-          if (!cab) {
-            throw new BadRequestException(
-              "Una aplicación no pertenece al lote",
-            );
+          if (!ca) {
+            throw new BadRequestException("Un costo no pertenece al lote");
           }
-          const r = await em
-            .getRepository(TratamientoAplicado)
-            .update({ idAplicacionLote: cab.id }, { liquidada: true });
-          liquidados += r.affected ?? 0;
+          if (ca.liquidada) {
+            throw new BadRequestException("Un costo ya está liquidado");
+          }
+          const monto = r2(it.precio ?? Number(ca.monto));
+          ca.monto = monto;
+          ca.liquidada = true;
+          await costoApRepo.save(ca);
+          push({
+            tipo: "costo",
+            idReferencia: ca.id,
+            concepto: "costo",
+            etiqueta: ca.descripcion,
+            precio: monto,
+            costo: monto,
+          });
         } else {
           throw new BadRequestException("Tipo de ítem desconocido");
         }
       }
+
+      await itemRepo.save(filas.map((f) => itemRepo.create(f)));
+      liq.total = r2(total);
+      await liqRepo.save(liq);
+      return { idLiquidacion: liq.id, total: r2(total), items: filas.length };
     });
-    return { liquidados };
   }
 
   /**
-   * Subtotales de costo del lote por rubro (para el resumido): alimentación y
-   * tratamientos, cada uno con su parte liquidada y pendiente.
+   * Imputa un costo vario pendiente al lote (queda en el balance hasta
+   * liquidarse). El costo puede ser existente (`idCosto`) o nuevo por nombre
+   * (se crea en la empresa, como los insumos inline).
+   */
+  async imputarCosto(
+    idLote: number,
+    dto: ImputarCostoDto,
+    user: any,
+  ): Promise<CostoAplicado> {
+    const lote = await this.getLoteVerificado(idLote, user);
+    const fecha = this.aDate(dto.fecha);
+    if (!fecha) throw new BadRequestException("Fecha de costo inválida");
+    const cat = await this.costos.resolverCosto(
+      { idCosto: dto.idCosto, nombre: dto.nombre },
+      lote.idEmpresa,
+    );
+    return this.costoAplicadoRepository.save(
+      this.costoAplicadoRepository.create({
+        idCosto: cat.id,
+        idLote: lote.id,
+        idEmpresa: lote.idEmpresa,
+        fecha,
+        descripcion: dto.descripcion?.trim() || cat.nombre,
+        monto: Math.round(Number(dto.monto) * 100) / 100,
+        liquidada: false,
+        idUsuario: user?.id ?? null,
+      }),
+    );
+  }
+
+  /**
+   * Lista liquidaciones visibles (filtros + paginado server, como
+   * alimentaciones/salidas). Un cliente sólo ve las de sus lotes.
+   */
+  async listarLiquidaciones(
+    user: any,
+    f: {
+      idLote?: number;
+      idCliente?: string;
+      fechaDesde?: string;
+      fechaHasta?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{
+    data: {
+      id: number;
+      fecha: string;
+      idLote: number;
+      loteNombre: string;
+      idCliente: string | null;
+      clienteNombre: string | null;
+      nItems: number;
+      total: number;
+    }[];
+    total: number;
+  }> {
+    const isAdmin = user.roles?.includes(Roles.SYS_ADMIN);
+    const isCliente = !isAdmin && esCliente(user.roles);
+    const userEmpresas: number[] = (user.idEmpresas || []).map((e: any) =>
+      Number(e),
+    );
+    const qb = this.liquidacionRepository
+      .createQueryBuilder("l")
+      .innerJoinAndSelect("l.lote", "lote")
+      .leftJoin("l.items", "it")
+      .select([
+        "l.id",
+        "l.fecha",
+        "l.total",
+        "lote.id",
+        "lote.nombre",
+        "lote.idCliente",
+      ])
+      .addSelect("COUNT(DISTINCT it.id)", "nItems")
+      .groupBy("l.id")
+      .addGroupBy("lote.id")
+      .addGroupBy("lote.nombre")
+      .addGroupBy("lote.idCliente");
+    if (!isAdmin) {
+      if (userEmpresas.length === 0) return { data: [], total: 0 };
+      qb.andWhere("l.id_empresa IN (:...ids)", { ids: userEmpresas });
+    }
+    if (isCliente) {
+      qb.andWhere("lote.id_cliente = :uid", { uid: user.id });
+    } else if (f.idCliente) {
+      qb.andWhere("lote.id_cliente = :cli", { cli: f.idCliente });
+    }
+    if (f.idLote) qb.andWhere("l.id_lote = :lote", { lote: f.idLote });
+    if (f.fechaDesde) qb.andWhere("l.fecha >= :desde", { desde: f.fechaDesde });
+    if (f.fechaHasta) qb.andWhere("l.fecha <= :hasta", { hasta: f.fechaHasta });
+    qb.orderBy("l.fecha", "DESC").addOrderBy("l.id", "DESC");
+    const page = Math.max(1, f.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, f.pageSize ?? 20));
+    qb.offset((page - 1) * pageSize).limit(pageSize);
+    const { entities, raw } = await qb.getRawAndEntities();
+    const nPorId = new Map<number, number>();
+    for (const r of raw) nPorId.set(Number(r.l_id), Number(r.nItems));
+    const data: {
+      id: number;
+      fecha: string;
+      idLote: number;
+      loteNombre: string;
+      idCliente: string | null;
+      clienteNombre: string | null;
+      nItems: number;
+      total: number;
+    }[] = [];
+    for (const l of entities) {
+      data.push({
+        id: l.id,
+        fecha: this.fechaIso(l.fecha) ?? "",
+        idLote: l.lote.id,
+        loteNombre: l.lote.nombre,
+        idCliente: l.lote.idCliente ?? null,
+        clienteNombre: null,
+        nItems: nPorId.get(l.id) ?? 0,
+        total: Number(l.total),
+      });
+    }
+    // Nombres de clientes (cache Firestore, como en findOne).
+    for (const d of data) {
+      if (d.idCliente)
+        d.clienteNombre = await this.nombreDeCliente(d.idCliente);
+    }
+    // Total para el pager (misma query sin paginado).
+    const totalQb = this.liquidacionRepository
+      .createQueryBuilder("l")
+      .innerJoin("l.lote", "lote");
+    if (!isAdmin) {
+      if (userEmpresas.length === 0) return { data: [], total: 0 };
+      totalQb.andWhere("l.id_empresa IN (:...ids)", { ids: userEmpresas });
+    }
+    if (isCliente) {
+      totalQb.andWhere("lote.id_cliente = :uid", { uid: user.id });
+    } else if (f.idCliente) {
+      totalQb.andWhere("lote.id_cliente = :cli", { cli: f.idCliente });
+    }
+    if (f.idLote) totalQb.andWhere("l.id_lote = :lote", { lote: f.idLote });
+    if (f.fechaDesde)
+      totalQb.andWhere("l.fecha >= :desde", { desde: f.fechaDesde });
+    if (f.fechaHasta)
+      totalQb.andWhere("l.fecha <= :hasta", { hasta: f.fechaHasta });
+    const total = await totalQb.getCount();
+    return { data, total };
+  }
+
+  /** Detalle de una liquidación (cabecera + líneas congeladas). */
+  async getLiquidacion(
+    id: number,
+    user: any,
+  ): Promise<{
+    id: number;
+    fecha: string;
+    idLote: number;
+    loteNombre: string;
+    total: number;
+    items: {
+      id: number;
+      tipo: string;
+      idReferencia: number;
+      concepto: string;
+      etiqueta: string;
+      cantidad: number | null;
+      precio: number | null;
+      costo: number;
+    }[];
+  }> {
+    const liq = await this.liquidacionRepository.findOne({
+      where: { id },
+      relations: ["lote", "items"],
+    });
+    if (!liq) throw new NotFoundException("Liquidación no encontrada");
+    // Aislamiento: verifica acceso al lote (incluye filtro de cliente).
+    await this.getLoteVerificado(liq.idLote, user);
+    return {
+      id: liq.id,
+      fecha: this.fechaIso(liq.fecha) ?? "",
+      idLote: liq.idLote,
+      loteNombre: liq.lote?.nombre ?? "",
+      total: Number(liq.total),
+      items: (liq.items ?? [])
+        .sort((a, b) => a.id - b.id)
+        .map((i) => ({
+          id: i.id,
+          tipo: i.tipo,
+          idReferencia: i.idReferencia,
+          concepto: i.concepto,
+          etiqueta: i.etiqueta,
+          cantidad: i.cantidad == null ? null : Number(i.cantidad),
+          precio: i.precio == null ? null : Number(i.precio),
+          costo: Number(i.costo),
+        })),
+    };
+  }
+
+  /** Costo $/kg de una versión de dieta a referencias vivas (para liquidar). */ private async costoKgDeVersion(
+    idVersion: number | null | undefined,
+  ): Promise<number> {
+    if (idVersion == null) return 0;
+    const comp = await this.dietaVersionInsumoRepository.find({
+      where: { idDietaVersion: idVersion },
+      relations: ["insumo"],
+    });
+    return comp.reduce(
+      (acc, v) =>
+        acc +
+        (Number(v.porcentaje) / 100) *
+          (v.insumo?.precioReferencia == null
+            ? 0
+            : Number(v.insumo.precioReferencia)),
+      0,
+    );
+  }
+
+  /**
+   * Subtotales de costo del lote por rubro (para el resumido): alimentación,
+   * tratamientos y costos varios, cada uno con su parte liquidada y
+   * pendiente. Liquidado = líneas congeladas al liquidar; pendiente =
+   * referencias vivas del momento.
    */
   private async subtotalesDeLote(idLote: number): Promise<BalanceSubtotales> {
     const r2 = (n: number) => Math.round(n * 100) / 100;
+    const congeladas = await this.lineasCongeladasDeLote(idLote);
     let alimLiquidado = 0;
     let alimPendiente = 0;
     let tratLiquidado = 0;
     let tratPendiente = 0;
+    let costoLiquidado = 0;
+    let costoPendiente = 0;
 
     const filasAl = await this.alimentacionLoteRepository.find({
       where: { idLote },
@@ -2654,14 +3184,21 @@ export class LotesService {
       lista.push(f);
       porEvento.set(f.idAlimentacion, lista);
     }
-    for (const filas of porEvento.values()) {
+    for (const [idAl, filas] of porEvento.entries()) {
       const al = filas[0].alimentacion;
       const unit = costoKgPorVersion.get(al?.idDietaVersion) ?? 0;
       let kg = 0;
       for (const f of filas) {
         kg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
       }
-      const costo = r2(kg * unit);
+      const fz =
+        (al?.liquidada ?? false)
+          ? (congeladas.get(`alimentacion:${idAl}`) ?? [])
+          : [];
+      const costo =
+        fz.length > 0
+          ? r2(fz.reduce((acc, l) => acc + Number(l.costo), 0))
+          : r2(kg * unit);
       if (al?.liquidada) alimLiquidado += costo;
       else alimPendiente += costo;
     }
@@ -2673,19 +3210,40 @@ export class LotesService {
     if (animales.length > 0) {
       const aplicados = await this.tratamientoAplicadoRepository.find({
         where: { idAnimal: In(animales.map((a) => a.id)) },
-        relations: ["insumos"],
+        relations: ["tratamiento", "insumos", "insumos.insumo"],
       });
       for (const a of aplicados) {
-        const costo = r2(
-          (a.precio == null ? 0 : Number(a.precio)) +
-            (a.insumos ?? []).reduce(
-              (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
-              0,
-            ),
-        );
+        const fz =
+          (a.liquidada ?? false)
+            ? (congeladas.get(`tratamiento:${a.id}`) ?? [])
+            : [];
+        const costo =
+          fz.length > 0
+            ? r2(fz.reduce((acc, l) => acc + Number(l.costo), 0))
+            : r2(
+                (a.tratamiento?.precioReferencia == null
+                  ? 0
+                  : Number(a.tratamiento.precioReferencia)) +
+                  (a.insumos ?? []).reduce(
+                    (acc, i) =>
+                      acc +
+                      (i.insumo?.precioReferencia == null
+                        ? 0
+                        : Number(i.insumo.precioReferencia)),
+                    0,
+                  ),
+              );
         if (a.liquidada ?? false) tratLiquidado += costo;
         else tratPendiente += costo;
       }
+    }
+
+    const costos = await this.costoAplicadoRepository.find({
+      where: { idLote },
+    });
+    for (const c of costos) {
+      if (c.liquidada ?? false) costoLiquidado += Number(c.monto);
+      else costoPendiente += Number(c.monto);
     }
     return {
       alimentacion: {
@@ -2696,89 +3254,35 @@ export class LotesService {
         liquidado: r2(tratLiquidado),
         pendiente: r2(tratPendiente),
       },
+      costos: {
+        liquidado: r2(costoLiquidado),
+        pendiente: r2(costoPendiente),
+      },
     };
   }
 
   /**
-   * Totales de costo del lote (para el resumen): alimentaciones por reparto a
-   * precios de referencia + tratamientos a precios aplicados.
+   * Totales de costo del lote (para el resumen): suma de los subtotales por
+   * rubro (congelados si liquidados, referencias vivas si no).
    */
   private async totalesDeLote(
     idLote: number,
   ): Promise<{ total: number; liquidado: number; pendiente: number }> {
     const r2 = (n: number) => Math.round(n * 100) / 100;
-    let total = 0;
-    let liquidado = 0;
-
-    const filasAl = await this.alimentacionLoteRepository.find({
-      where: { idLote },
-      relations: ["alimentacion"],
-    });
-    const versionIds = Array.from(
-      new Set(
-        filasAl
-          .map((f) => f.alimentacion?.idDietaVersion)
-          .filter((v): v is number => v != null),
-      ),
+    const sub = await this.subtotalesDeLote(idLote);
+    const total = r2(
+      sub.alimentacion.liquidado +
+        sub.alimentacion.pendiente +
+        sub.tratamientos.liquidado +
+        sub.tratamientos.pendiente +
+        sub.costos.liquidado +
+        sub.costos.pendiente,
     );
-    const compVersiones =
-      versionIds.length > 0
-        ? await this.dietaVersionInsumoRepository.find({
-            where: { idDietaVersion: In(versionIds) },
-            relations: ["insumo"],
-          })
-        : [];
-    const costoKgPorVersion = new Map<number, number>();
-    for (const v of compVersiones) {
-      const unit =
-        (costoKgPorVersion.get(v.idDietaVersion) ?? 0) +
-        (Number(v.porcentaje) / 100) *
-          (v.insumo?.precioReferencia == null
-            ? 0
-            : Number(v.insumo.precioReferencia));
-      costoKgPorVersion.set(v.idDietaVersion, unit);
-    }
-    const porEvento = new Map<number, typeof filasAl>();
-    for (const f of filasAl) {
-      const lista = porEvento.get(f.idAlimentacion) ?? [];
-      lista.push(f);
-      porEvento.set(f.idAlimentacion, lista);
-    }
-    for (const filas of porEvento.values()) {
-      const al = filas[0].alimentacion;
-      const unit = costoKgPorVersion.get(al?.idDietaVersion) ?? 0;
-      let kg = 0;
-      for (const f of filas) {
-        kg += Number(f.cantidadKg) + Number(f.cantidadEnfermeriaKg);
-      }
-      const costo = r2(kg * unit);
-      total += costo;
-      if (al?.liquidada) liquidado += costo;
-    }
-
-    const animales = await this.animalRepository.find({
-      where: { idLote },
-      select: ["id"],
-    });
-    if (animales.length > 0) {
-      const aplicados = await this.tratamientoAplicadoRepository.find({
-        where: { idAnimal: In(animales.map((a) => a.id)) },
-        relations: ["insumos"],
-      });
-      for (const a of aplicados) {
-        const costo = r2(
-          (a.precio == null ? 0 : Number(a.precio)) +
-            (a.insumos ?? []).reduce(
-              (acc, i) => acc + (i.precio == null ? 0 : Number(i.precio)),
-              0,
-            ),
-        );
-        total += costo;
-        if (a.liquidada ?? false) liquidado += costo;
-      }
-    }
-    total = r2(total);
-    liquidado = r2(liquidado);
+    const liquidado = r2(
+      sub.alimentacion.liquidado +
+        sub.tratamientos.liquidado +
+        sub.costos.liquidado,
+    );
     return { total, liquidado, pendiente: r2(total - liquidado) };
   }
 

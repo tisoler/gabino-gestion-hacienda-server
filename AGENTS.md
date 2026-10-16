@@ -248,16 +248,34 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   aceptan `tratamientos` opcionales (requieren `escritura:veterinaria`): cada item es un
   `idTratamiento`/`idInsumo` existente o un `nombre` nuevo (con descripción/precio/unidad)
   que el server crea con la empresa del lote — insumos siempre con categoría Veterinaria,
-  sin pedir escritura:insumo (igual que en dietas). Migración `020-veterinaria.sql`.
+  sin pedir escritura:insumo (igual que en dietas). El precio ya NO se guarda al aplicar:
+  sólo se congela al liquidar (referencias vivas hasta entonces). Migración `020-veterinaria.sql`.
   Ver el modelo en DESIGN.
 - **balance** (en `lotes`): `GET /lotes/:id/balance` y `GET /lotes/balances`
   (`lectura:balance-lote` o `lectura:balance-lote-base`; el primero se impone: con ambos se ve
-  el detalle) con costos (alimentaciones a precios de referencia + tratamientos a precios
-  aplicados; masivos al lote en un registro con sus animales) y totales total/liquidado/
-  pendiente. Con sólo base: resumido (subtotales por rubro con su parte liquidada y
-  pendiente, sin detalle). `POST /lotes/:id/liquidar` (`escritura:balance-lote`) marca
-  liquidados los ítems indicados (alimentación, tratamiento o aplicación; verificados
-  contra el lote, en transacción).
+  el detalle) con costos por rubro (Alimentación, Tratamientos, Costos varios) y totales
+  total/liquidado/pendiente. Regla de precio: liquidado = líneas CONGELADAS al liquidar
+  (`liquidacion_item`); pendiente = referencias vivas (insumos/tratamientos/costos). Con sólo
+  base: resumido (subtotales por rubro con su parte liquidada y pendiente, sin detalle).
+  `POST /lotes/:id/costos` (`escritura:balance-lote`) imputa un costo vario pendiente
+  (`idCosto` o `nombre` nuevo, que se crea en la empresa). Migración `024`.
+- **liquidaciones** (en `lotes`): `POST /lotes/:id/liquidar` (`escritura:liquidacion`) genera
+  la liquidación: `{ fecha, items?: [{tipo: alimentacion|tratamiento|costo, id, precio?,
+  insumos?: [{id, precio}]}], costosNuevos?: [{idCosto?|nombre?, fecha?, descripcion?, monto}] }`.
+  Crea la cabecera `liquidacion` + líneas `liquidacion_item` (alimentación: 1 línea evento
+  kg×$/kg; tratamiento: 1 base + N insumos; costo: 1 línea monto), imputa los costos nuevos
+  (nacen liquidados) y marca `liquidada` en cada evento; todo verificado contra el lote, en
+  transacción; el total lo calcula el server. `GET /liquidaciones` (`lectura:liquidacion`,
+  filtros `idLote`/`idCliente`/`fechaDesde`/`fechaHasta` + paginado `{data,total}`) y
+  `GET /liquidaciones/:id` (cabecera + líneas). La creación es sólo desde el balance del lote.
+  El precio NO se guarda al aplicar tratamientos (sólo al liquidar). Migración `024`.
+- **costos** (catálogo de costos varios, sin categorías, espejo de tratamientos):
+  `GET /costos?estado&scope&idEmpresa` (`lectura:costo`; `todas` requiere `escritura:costo`) ·
+  `POST /costos` (`escritura:costo`, alcance sys-admin o empresa propia) ·
+  `PATCH /costos/:id` · `PATCH /costos/:id/activo`. Nombre único por alcance
+  (`capitalizarNombre`, regla 9). Se imputan a lotes con `POST /lotes/:id/costos` o inline al
+  liquidar (el server los crea por nombre sin pedir escritura:costo, como insumos en dietas).
+  Migración `024-liquidaciones-costos.sql`. Ver el modelo en DESIGN.
 - **insumos** (catálogo de insumos + categorías): `GET /insumos?estado=activas|todas&scope=todas|global|empresa&idEmpresa=`
   (`lectura:insumo`; `todas` requiere `escritura:insumo`; `idEmpresa` sólo sys-admin) con su
   categoría · `GET /insumos/categorias` (globales + empresa) · `POST /insumos`
@@ -293,12 +311,19 @@ salidas; `escritura:salida` da salida a animales. `lectura:insumo` ve el catálo
 insumos (sólo activos); `escritura:insumo` ve también los desactivados, crea/edita y
 activa/desactiva. `lectura:veterinaria` ve el catálogo de tratamientos (sólo activos);
 `escritura:veterinaria` gestiona el catálogo y aplica tratamientos (en movimientos,
-directos o al lote).
+directos o al lote). `lectura:costo` ve el catálogo de costos varios (sólo activos);
+`escritura:costo` ve también los desactivados, crea/edita y activa/desactiva.
+`lectura:liquidacion` ve liquidaciones (sólo lectura; la creación es desde el balance);
+`escritura:liquidacion` genera liquidaciones (con `escritura:balance-lote` además se
+imputan costos pendientes al lote).
 
 **Seed de Firestore pendiente**: agregar los permisos `p_salida_r` / `p_salida_w`,
 `p_insumo_r` / `p_insumo_w`, `p_veterinaria_r` / `p_veterinaria_w` y
 `p_balance_lote_r` / `p_balance_lote_w` a los roles 1 y 2 (`p_balance_lote_r` también
 al 3) y crear el rol 5
-`cliente-base` (igual a cliente + `p_balance_base_r`).
+`cliente-base` (igual a cliente + `p_balance_base_r`). Nuevos de este módulo:
+`p_liquidacion_r` / `p_liquidacion_w` y `p_costo_r` / `p_costo_w` (recomendado:
+anfitrión ambos de costo + ambos de liquidación; operario sólo `p_liquidacion_r`;
+por ahora restringidos a sys-admin + asesores hasta asignarlos).
 
 Modelo de datos, paleta y seed de Firestore: ver [`DESIGN.md`](./DESIGN.md).

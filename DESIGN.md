@@ -171,7 +171,8 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   aplicaciones a UN animal (`id_animal` requerido; `id_movimiento` opcional — presente si
   nace de un movimiento a/desde enfermería; `id_tratamiento` FK; `precio`; `fecha`+`hora`
   del instante; `alcance` 'animal'|'lote'; `id_usuario`) con sus insumos
-  (`id_insumo` + `precio` aplicado). Los insumos de un tratamiento deben tener categoría
+  (`id_insumo` + `precio` aplicado, hoy legado sin uso: el precio sólo se congela al
+  liquidar). Los insumos de un tratamiento deben tener categoría
   Veterinaria. Creación inline (tratamientos e insumos nuevos) por dentro del servicio, sin
   exigir escritura:insumo. Permisos `lectura:veterinaria` / `escritura:veterinaria`.
   Endpoints: catálogo (`GET /tratamientos`, `POST`, `PATCH /:id`, `PATCH /:id/activo`),
@@ -183,14 +184,29 @@ para su empresa. Las dietas globales sólo las gestiona el sys-admin. `lectura:d
   (cabecera por aplicación masiva: UNA fila = UN evento de costo; los alcance='lote'
   cuelgan de ella; imputar = por cabecera). Migración `020-veterinaria.sql` + `021`.
 - **Balance económico del lote** — `GET /lotes/:id/balance` (`lectura:balance-lote` o
-  `lectura:balance-lote-base`; el primero se impone):
-  alimentaciones que tocaron al lote (por reparto, costo = kg × costo $/kg de la versión
-  a precios de referencia; insumos sin precio = 0) + tratamientos (individuales uno por
-  registro, con caravana; masivos uno por cabecera, con animales por caravana) + totales
-  (total / liquidado / pendiente, desde las banderas `liquidada`). `tratamiento_aplicado`
-  lleva `liquidada` (migración 022; parcial = fila por fila). Con sólo base: resumido —
-  subtotal de alimentación y subtotal de tratamientos, cada uno con su parte liquidada y
-  pendiente, sin detalle.
+  `lectura:balance-lote-base`; el primero se impone): tres rubros — alimentaciones que
+  tocaron al lote (por reparto), tratamientos (individuales uno por registro, con caravana;
+  masivos uno por cabecera, con animales por caravana; ambos expandibles a base + insumos)
+  y costos varios imputados — + totales (total / liquidado / pendiente). Regla de precio:
+  liquidado = líneas CONGELADAS al liquidar (`liquidacion_item`); pendiente = referencias
+  vivas (insumos, tratamientos, costos). `tratamiento_aplicado` y `costo_aplicado` llevan
+  `liquidada`; `alimentacion` también (si está liquidada no se puede eliminar). Con sólo
+  base: resumido — subtotal por rubro con su parte liquidada y pendiente, sin detalle.
+- **Liquidaciones** — `liquidacion` (cabecera por lote: `id_lote` + `fecha` + `total`
+  calculado por el server + `id_usuario`) + `liquidacion_item` (líneas de precio congelado:
+  alimentación = 1 línea evento kg×$/kg; tratamiento aplicado = 1 base + N insumos; costo
+  = 1 línea monto; con `etiqueta` snapshot). Se generan sólo desde el balance
+  (`POST /lotes/:id/liquidar`, `escritura:liquidacion`): precios editables (default
+  referencias del momento) + costos nuevos inline (nacen liquidados); todo en transacción.
+  Lectura en `GET /liquidaciones` (filtros + paginado) y `GET /liquidaciones/:id`
+  (`lectura:liquidacion`, sólo lectura). Migración `024`.
+- **Costos varios** — `costo` (catálogo espejo de tratamientos: `id_empresa` nullable
+  global, `nombre` único por alcance, `descripcion`, `precio_referencia`, `activo`) +
+  `costo_aplicado` (imputación a UN lote: `id_lote` + `fecha` + `descripcion` + `monto` +
+  `liquidada`). Se imputan pendientes desde el balance (`POST /lotes/:id/costos`,
+  `escritura:balance-lote`) o inline al liquidar (nacen liquidados). Catálogo en
+  `GET /costos` · `POST /costos` · `PATCH /costos/:id` · `PATCH /costos/:id/activo`
+  (`lectura:costo` / `escritura:costo`). Migración `024`.
 - **Catálogos multitenant** (`raza`, `categoria`, `pelaje`, `proveedor`, `lugar_origen`,
   `motivo`) — `id`, `id_empresa` FK **nullable** (NULL = valor **global**, visible para todas;
   con valor = creado por/para esa empresa), `nombre`, timestamps. Unicidad por

@@ -14,6 +14,7 @@ import { AlimentacionModule } from "./alimentacion/alimentacion.module";
 import { SalidasModule } from "./salidas/salidas.module";
 import { InsumosModule } from "./insumos/insumos.module";
 import { VeterinariaModule } from "./veterinaria/veterinaria.module";
+import { CostosModule } from "./costos/costos.module";
 
 import { Empresa } from "./entities/empresa.entity";
 import { EmpresaCliente } from "./entities/empresa-cliente.entity";
@@ -48,6 +49,8 @@ import {
   TratamientoAplicadoInsumo,
   TratamientoAplicadoLote,
 } from "./entities/tratamiento.entity";
+import { Costo, CostoAplicado } from "./entities/costo.entity";
+import { Liquidacion, LiquidacionItem } from "./entities/liquidacion.entity";
 
 @Module({
   imports: [
@@ -92,6 +95,10 @@ import {
           TratamientoAplicado,
           TratamientoAplicadoInsumo,
           TratamientoAplicadoLote,
+          Costo,
+          CostoAplicado,
+          Liquidacion,
+          LiquidacionItem,
         ],
         synchronize: false, // Migraciones manuales
         logging: true,
@@ -111,6 +118,7 @@ import {
     SalidasModule,
     InsumosModule,
     VeterinariaModule,
+    CostosModule,
   ],
 })
 export class AppModule {}
