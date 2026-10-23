@@ -12,6 +12,8 @@ import { AnimalMovimiento } from "../entities/animal-movimiento.entity";
 import { Salida } from "../entities/salida.entity";
 import { SalidaAnimal } from "../entities/salida-animal.entity";
 import { AlimentacionService } from "./alimentacion.service";
+import { OcrService } from "./ocr.service";
+import { ExcelService } from "./excel.service";
 import { AlimentacionController } from "./alimentacion.controller";
 
 @Module({
@@ -31,7 +33,7 @@ import { AlimentacionController } from "./alimentacion.controller";
       SalidaAnimal,
     ]),
   ],
-  providers: [AlimentacionService],
+  providers: [AlimentacionService, OcrService, ExcelService],
   controllers: [AlimentacionController],
 })
 export class AlimentacionModule {}

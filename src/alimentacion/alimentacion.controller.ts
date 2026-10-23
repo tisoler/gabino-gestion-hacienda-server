@@ -9,8 +9,12 @@ import {
   Post,
   Query,
   Request,
+  UploadedFile,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
+import { FilesInterceptor, FileInterceptor } from "@nestjs/platform-express";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -19,6 +23,8 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { AlimentacionService, AlimentacionView } from "./alimentacion.service";
+import { OcrService } from "./ocr.service";
+import { ExcelService } from "./excel.service";
 import {
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
@@ -33,7 +39,65 @@ import { Permissions } from "../auth/decorators/permissions.decorator";
 @UseGuards(FirebaseGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class AlimentacionController {
-  constructor(private readonly service: AlimentacionService) {}
+  constructor(
+    private readonly service: AlimentacionService,
+    private readonly ocr: OcrService,
+    private readonly excel: ExcelService,
+  ) {}
+
+  @Post("importar-xlsx")
+  @Permissions("escritura:alimento")
+  @UseInterceptors(
+    FileInterceptor("archivo", { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
+  @ApiOperation({
+    summary: "Importar planilla Excel de alimentación — preview por hoja",
+    description:
+      "Lee la tabla izquierda (FECHA|ALIMENTO|CANTIDAD|OBS) de cada hoja y " +
+      "devuelve un preview best-effort (corral del nombre de hoja, fechas, " +
+      "dietas, cantidades y cambios de corral). El guardado real es posterior.",
+  })
+  async importarXlsx(
+    @Request() req,
+    @UploadedFile() archivo?: Express.Multer.File,
+  ) {
+    void req;
+    if (!archivo) return { hojas: [] };
+    return this.excel.analizarPlanilla(archivo.buffer);
+  }
+
+  @Post("importar-ocr")
+  @Permissions("escritura:alimento")
+  @UseInterceptors(FilesInterceptor("archivos", 20))
+  @ApiOperation({
+    summary: "Importar planillas de alimentación (fotos) — OCR + preview",
+    description:
+      "Detecta los renglones de la grilla, corre tesseract (TSV) y devuelve " +
+      "un preview best-effort (corral del encabezado, fechas y cambios de " +
+      "corral por observación). El guardado real es un paso posterior.",
+  })
+  async importarOcr(
+    @Request() req,
+    @UploadedFiles() archivos?: Express.Multer.File[],
+  ) {
+    void req;
+    if (!archivos || archivos.length === 0) {
+      return { imagenes: [] };
+    }
+    const imagenes = (
+      await Promise.all(
+        archivos.map(async (a) => {
+          const r = await this.ocr.analizarPlanilla(a.buffer, a.originalname);
+          return r.map((x) => ({
+            nombre: x.nombre || a.originalname || "planilla",
+            corralHeader: x.corralHeader,
+            filas: x.filas,
+          }));
+        }),
+      )
+    ).flat();
+    return { imagenes };
+  }
 
   @Get("estado-corral")
   @Permissions("escritura:alimento")

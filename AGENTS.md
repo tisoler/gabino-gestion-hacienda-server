@@ -221,6 +221,18 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   FÍSICA (con su reparto por lote), sólo si NO está `liquidada` (una liquidada es
   inmutable para el futuro módulo de liquidaciones). Migración
   `019-alimentacion-liquidada.sql`.
+  `POST /alimentaciones/importar-ocr` (`escritura:alimento`, multipart `archivos[]`) corre
+  OCR sobre fotos de planillas manuscritas y devuelve un preview best-effort (`corralHeader` +
+  `filas` con fecha/corral/cantidad/cambio de corral "paso a corral N", una por renglón
+  detectado; fechas fusionadas "03110"→03/10, con espacios "12 10"; cantidad = último
+  número de la fila sin fecha).
+  Motor: RapidOCR ONNX vía `src/alimentacion/ocr_planilla.py` (requiere `python3` con
+  `rapidocr-onnxruntime`; `PYTHON_BIN` para override; modelos incluidos en el paquete, sin
+  descarga en runtime). Fallback: tesseract local (`TESSERACT_BIN`, default `tesseract`).
+  `POST /alimentaciones/importar-xlsx` (mismo permiso, multipart `archivo` único): lee la
+  tabla izquierda (FECHA serial|texto, ALIMENTO, CANTIDAD, OBS con turno M/T) de cada hoja
+  del .xlsx y devuelve `{ hojas: [{ nombre, corralHeader, filas }] }` (corral desde el nombre
+  de hoja; turno M→09:00, T→15:00). Sólo preview; el guardado es posterior.
 - **salidas** (egreso/entrega de animales + histórico): `POST /lotes/:id/salidas`
   (`escritura:salida`) con `{ fecha, hora?, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
   [{animalId, pesoFinal?, desbaste?}] }` (hora default 12:00). Salen animales VIVOS (sano/enfermo);
