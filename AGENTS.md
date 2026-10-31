@@ -232,7 +232,13 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   `POST /alimentaciones/importar-xlsx` (mismo permiso, multipart `archivo` único): lee la
   tabla izquierda (FECHA serial|texto, ALIMENTO, CANTIDAD, OBS con turno M/T) de cada hoja
   del .xlsx y devuelve `{ hojas: [{ nombre, corralHeader, filas }] }` (corral desde el nombre
-  de hoja; turno M→09:00, T→15:00). Sólo preview; el guardado es posterior.
+  de hoja; turno M→09:00, T→15:00). El alta es `POST /alimentaciones/importar-guardar`
+  (mismo permiso; las filas vet exigen además `escritura:veterinaria`): dietas →
+  alimentaciones (reparto reconstruido al instante); tratamientos/insumos → aplicaciones
+  a los animales vivos del corral en T (cabecera por lote, alcance 'lote'; el insumo suelto
+  usa el tratamiento global "Aplicación insumo veterinario" y guarda cantidad/unidad en
+  `tratamiento_aplicado_insumo`, migración 025). Fila por fila (cada una en su transacción):
+  devuelve `{ creadas, errores, alimentaciones, aplicaciones, animalesAlcanzados }`.
 - **salidas** (egreso/entrega de animales + histórico): `POST /lotes/:id/salidas`
   (`escritura:salida`) con `{ fecha, hora?, tipo: 'lote'|'partida'|'animales', idPartida?, animales:
   [{animalId, pesoFinal?, desbaste?}] }` (hora default 12:00). Salen animales VIVOS (sano/enfermo);

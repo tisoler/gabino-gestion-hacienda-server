@@ -66,6 +66,16 @@ export class TratamientoAplicadoInsumoDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   precio?: number | null;
+
+  /**
+   * Cantidad de insumo aplicada (informativa, no afecta el costo).
+   * Su unidad es `unidad` (el campo de arriba, ahora también admite 'ml').
+   */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  cantidad?: number | null;
 }
 
 /**

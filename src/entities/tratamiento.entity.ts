@@ -199,4 +199,16 @@ export class TratamientoAplicadoInsumo {
   /** Precio del insumo al aplicarlo (default: precio de referencia). */
   @Column({ type: "decimal", precision: 12, scale: 2, nullable: true })
   precio: number | null;
+
+  /**
+   * Cantidad de insumo registrada al aplicar (informativa: el costo se
+   * congela por precio al liquidar). P. ej. desde la importación de
+   * planillas (columna CANTIDAD).
+   */
+  @Column({ type: "decimal", precision: 12, scale: 2, nullable: true })
+  cantidad: number | null;
+
+  /** Unidad de `cantidad` ('kg' | 'unidad' | 'ml'). */
+  @Column({ type: "varchar", length: 16, nullable: true })
+  unidad: string | null;
 }

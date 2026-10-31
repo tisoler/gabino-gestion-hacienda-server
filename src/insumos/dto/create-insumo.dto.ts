@@ -11,7 +11,7 @@ import {
 } from "class-validator";
 
 /** Unidades admitidas para el precio de referencia de un insumo. */
-export const INSUMO_UNIDADES = ["kg", "unidad"] as const;
+export const INSUMO_UNIDADES = ["kg", "unidad", "ml"] as const;
 
 export class CreateInsumoDto {
   @IsString()

@@ -29,6 +29,7 @@ import {
   CreateAlimentacionDto,
   CreateAlimentacionesMasivaDto,
 } from "./dto/create-alimentacion.dto";
+import { GuardarImportDto } from "./dto/guardar-import.dto";
 import { ActualizarAlimentacionDto } from "./dto/actualizar-alimentacion.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
@@ -55,7 +56,7 @@ export class AlimentacionController {
     description:
       "Lee la tabla izquierda (FECHA|ALIMENTO|CANTIDAD|OBS) de cada hoja y " +
       "devuelve un preview best-effort (corral del nombre de hoja, fechas, " +
-      "dietas, cantidades y cambios de corral). El guardado real es posterior.",
+      "dietas, cantidades y cambios de corral). El alta es POST /alimentaciones/importar-guardar.",
   })
   async importarXlsx(
     @Request() req,
@@ -191,6 +192,21 @@ export class AlimentacionController {
     @Request() req,
   ): Promise<AlimentacionView> {
     return this.service.crear(dto, req.user);
+  }
+
+  @Post("importar-guardar")
+  @Permissions("escritura:alimento")
+  @ApiOperation({
+    summary: "Dar de alta las filas del preview de una planilla importada",
+    description:
+      "Dietas → alimentaciones del corral (con reparto reconstruido al " +
+      "instante fecha+hora). Tratamientos e insumos → aplicaciones a los " +
+      "animales vivos del corral en ese instante (el insumo suelto usa el " +
+      "tratamiento global 'Aplicación insumo veterinario'). Se procesa fila " +
+      "por fila: devuelve las refs creadas y los errores por fila.",
+  })
+  guardarImport(@Body() dto: GuardarImportDto, @Request() req) {
+    return this.service.guardarImport(dto, req.user);
   }
 
   @Post("masiva")

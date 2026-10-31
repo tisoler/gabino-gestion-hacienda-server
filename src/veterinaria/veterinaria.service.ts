@@ -44,6 +44,8 @@ export interface TratamientoAplicadoView {
     idInsumo: number;
     nombre: string;
     precio: number | null;
+    cantidad: number | null;
+    unidad: string | null;
   }[];
 }
 
@@ -323,6 +325,8 @@ export class TratamientosService {
                 idInsumo: i.idInsumo,
                 // El precio NO se guarda al aplicar: se congela al liquidar.
                 precio: null,
+                cantidad: i.cantidad,
+                unidad: i.unidad,
               });
             }
             k++;
@@ -542,6 +546,8 @@ export class TratamientosService {
                 idInsumo: i.idInsumo,
                 // El precio NO se guarda al aplicar: se congela al liquidar.
                 precio: null,
+                cantidad: i.cantidad,
+                unidad: i.unidad,
               }),
             ),
           );
@@ -613,6 +619,8 @@ export class TratamientosService {
                 idInsumo: i.idInsumo,
                 // El precio NO se guarda al aplicar: se congela al liquidar.
                 precio: null,
+                cantidad: i.cantidad,
+                unidad: i.unidad,
               }),
             ),
           );
@@ -630,13 +638,23 @@ export class TratamientosService {
     {
       idTratamiento: number;
       precio: number | null;
-      insumos: { idInsumo: number; precio: number | null }[];
+      insumos: {
+        idInsumo: number;
+        precio: number | null;
+        cantidad: number | null;
+        unidad: string | null;
+      }[];
     }[]
   > {
     const out: {
       idTratamiento: number;
       precio: number | null;
-      insumos: { idInsumo: number; precio: number | null }[];
+      insumos: {
+        idInsumo: number;
+        precio: number | null;
+        cantidad: number | null;
+        unidad: string | null;
+      }[];
     }[] = [];
     for (const item of items) {
       const idTratamiento = await this.resolverTratamiento(
@@ -656,7 +674,11 @@ export class TratamientosService {
     return out;
   }
 
-  private async resolverTratamiento(
+  /**
+   * Resuelve un tratamiento existente o lo crea (inline) en la empresa.
+   * Pública para reutilizarla desde la importación de planillas.
+   */
+  async resolverTratamiento(
     ref: {
       id?: number;
       nombre?: string;
@@ -711,8 +733,20 @@ export class TratamientosService {
   private async resolverInsumos(
     insumos: TratamientoAplicadoInsumoDto[],
     empresaId: number,
-  ): Promise<{ idInsumo: number; precio: number | null }[]> {
-    const out: { idInsumo: number; precio: number | null }[] = [];
+  ): Promise<
+    {
+      idInsumo: number;
+      precio: number | null;
+      cantidad: number | null;
+      unidad: string | null;
+    }[]
+  > {
+    const out: {
+      idInsumo: number;
+      precio: number | null;
+      cantidad: number | null;
+      unidad: string | null;
+    }[] = [];
     for (const item of insumos ?? []) {
       const idInsumo = await this.resolverInsumoVet(
         {
@@ -726,9 +760,59 @@ export class TratamientosService {
         empresaId,
       );
       const precio = item.precio ?? (await this.referenciaInsumo(idInsumo));
-      out.push({ idInsumo, precio });
+      out.push({
+        idInsumo,
+        precio,
+        cantidad: item.cantidad ?? null,
+        unidad: item.unidad || null,
+      });
     }
     return out;
+  }
+
+  /**
+   * Resuelve un insumo veterinario (existente o alta inline) y devuelve su
+   * id junto a la unidad a registrar (la indicada o la del catálogo).
+   * Pública para reutilizarla desde la importación de planillas.
+   */
+  async resolverInsumoImport(
+    ref: {
+      id?: number;
+      nombre?: string;
+      descripcion?: string | null;
+      precioReferencia?: number | null;
+      unidad?: string;
+      idCategoria?: number | null;
+    },
+    empresaId: number,
+  ): Promise<{ idInsumo: number; unidad: string | null }> {
+    const idInsumo = await this.resolverInsumoVet(ref, empresaId);
+    if (ref.unidad) return { idInsumo, unidad: ref.unidad };
+    const ins = await this.insumoRepository.findOne({
+      where: { id: idInsumo },
+    });
+    return { idInsumo, unidad: ins?.unidad ?? null };
+  }
+
+  /**
+   * Busca un tratamiento GLOBAL por nombre (case-insensitive). Lo usa la
+   * importación de planillas para las filas de insumo suelto (tratamiento
+   * "Aplicación insumo veterinario"): si no existe, se pide crearlo en vez
+   * de inventar uno por empresa.
+   */
+  async tratamientoGlobalPorNombre(nombre: string): Promise<Tratamiento> {
+    const t = await this.tratamientoRepository
+      .createQueryBuilder("t")
+      .where("t.id_empresa IS NULL")
+      .andWhere("LOWER(t.nombre) = LOWER(:n)", { n: nombre.trim() })
+      .andWhere("t.activo = TRUE")
+      .getOne();
+    if (!t) {
+      throw new BadRequestException(
+        `No existe el tratamiento global "${nombre.trim()}": crealo en Tratamientos para importar insumos sueltos.`,
+      );
+    }
+    return t;
   }
 
   private async resolverInsumoVet(
@@ -944,6 +1028,8 @@ export class TratamientosService {
         idInsumo: i.idInsumo,
         nombre: i.insumo?.nombre ?? "",
         precio: i.precio == null ? null : Number(i.precio),
+        cantidad: i.cantidad == null ? null : Number(i.cantidad),
+        unidad: i.unidad,
       })),
     };
   }
