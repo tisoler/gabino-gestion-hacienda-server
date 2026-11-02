@@ -187,8 +187,9 @@ El lint usa `.eslintrc.js` (recomendado + prettier, `--fix`).
   insumos (incluye las GLOBALES, `id_empresa` NULL) · `POST /dietas` (`escritura:dieta`)
   crea dieta o NUEVA versión si ya existe el nombre en el mismo alcance (versiona: desactiva la
   anterior). El **sys-admin** puede crear para Global (`idEmpresa: null`) o una empresa
-  (`idEmpresa: n`); el resto sólo para la suya. `GET /dietas/:id/versiones` (histórico) y
-  `PATCH /dietas/:id/activo` (activa/desactiva la dieta ENTERA) — las dietas globales sólo las
+  (`idEmpresa: n`); el resto sólo para la suya.   `GET /dietas/:id/versiones` (histórico),
+  `PATCH /dietas/:id/activo` (activa/desactiva la dieta ENTERA) y `PATCH /dietas/:id`
+  (renombra sin versionar, con unicidad por alcance) — las dietas globales sólo las
   gestiona el sys-admin. La dieta se compone de **insumos** (`dieta_version_insumo`):
   cada item es un `idInsumo` existente (con categoría "Ingrediente dieta", global o de la
   empresa; para dieta global sólo insumos globales) o un `nombre` nuevo que el server crea

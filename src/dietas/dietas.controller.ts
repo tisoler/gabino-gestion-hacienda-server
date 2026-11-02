@@ -19,6 +19,7 @@ import {
 } from "@nestjs/swagger";
 import { DietasService, DietaView } from "./dietas.service";
 import { CreateDietaDto } from "./dto/create-dieta.dto";
+import { RenombrarDietaDto } from "./dto/renombrar-dieta.dto";
 import { ToggleDietaActivoDto } from "./dto/toggle-dieta-activo.dto";
 import { FirebaseGuard } from "../auth/guards/firebase.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
@@ -68,6 +69,18 @@ export class DietasController {
     @Request() req,
   ): Promise<DietaView[]> {
     return this.dietasService.versiones(id, req.user);
+  }
+
+  @Patch(":id")
+  @Permissions("escritura:dieta")
+  @ApiOperation({ summary: "Renombrar la dieta (no crea versión)" })
+  @ApiParam({ name: "id", type: Number, description: "ID de la dieta" })
+  renombrar(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: RenombrarDietaDto,
+    @Request() req,
+  ): Promise<DietaView> {
+    return this.dietasService.renombrar(id, dto.nombre, req.user);
   }
 
   @Patch(":id/activo")

@@ -219,6 +219,44 @@ export class DietasService {
     return this.obtenerDetalle(idDieta, user);
   }
 
+  /**
+   * Renombra la dieta ENTERA (todas sus versiones comparten el nombre).
+   * No crea versión: es sólo etiqueta. Exige que no exista otra dieta con
+   * ese nombre en el mismo alcance.
+   */
+  async renombrar(
+    id: number,
+    nombreCrudo: string,
+    user: any,
+  ): Promise<DietaView> {
+    const dieta = await this.getDietaVerificado(id, user);
+    const nombre = capitalizarNombre(nombreCrudo ?? "");
+    if (!nombre) {
+      throw new BadRequestException("El nombre de la dieta es obligatorio");
+    }
+    if (nombre.toLowerCase() !== dieta.nombre.toLowerCase()) {
+      const otra = await this.dietaRepository
+        .createQueryBuilder("d")
+        .where(
+          dieta.idEmpresa == null
+            ? "d.id_empresa IS NULL"
+            : "d.id_empresa = :e",
+          { e: dieta.idEmpresa },
+        )
+        .andWhere("LOWER(d.nombre) = LOWER(:n)", { n: nombre })
+        .andWhere("d.id != :id", { id: dieta.id })
+        .getOne();
+      if (otra) {
+        throw new BadRequestException(
+          "Ya existe otra dieta con ese nombre en este alcance",
+        );
+      }
+      dieta.nombre = nombre;
+      await this.dietaRepository.save(dieta);
+    }
+    return this.obtenerDetalle(dieta.id, user);
+  }
+
   /** Activa/desactiva la dieta ENTERA (manual). */
   async toggleActivo(
     id: number,
