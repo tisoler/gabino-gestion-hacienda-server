@@ -208,7 +208,7 @@ export class TratamientoAplicadoInsumo {
   @Column({ type: "decimal", precision: 12, scale: 2, nullable: true })
   cantidad: number | null;
 
-  /** Unidad de `cantidad` ('kg' | 'unidad' | 'ml'). */
+  /** Unidad de `cantidad` ('kg' | 'unidad' | 'ml' | 'cc'). */
   @Column({ type: "varchar", length: 16, nullable: true })
   unidad: string | null;
 }

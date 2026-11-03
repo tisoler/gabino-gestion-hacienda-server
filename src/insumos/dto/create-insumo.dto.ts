@@ -10,8 +10,8 @@ import {
   ValidateIf,
 } from "class-validator";
 
-/** Unidades admitidas para el precio de referencia de un insumo. */
-export const INSUMO_UNIDADES = ["kg", "unidad", "ml"] as const;
+/** Unidades admitidas para el precio de referencia de un insumo (orden alfabético). */
+export const INSUMO_UNIDADES = ["cc", "kg", "ml", "unidad"] as const;
 
 export class CreateInsumoDto {
   @IsString()

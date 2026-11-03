@@ -51,7 +51,7 @@ export class CategoriaInsumo {
 
 /**
  * Insumo: nombre, descripción opcional, precio de referencia (número, sin
- * moneda), unidad ('kg' | 'unidad') y alcance (`idEmpresa` NULL = GLOBAL).
+ * moneda), unidad ('kg' | 'unidad' | 'ml' | 'cc') y alcance (`idEmpresa` NULL = GLOBAL).
  * `activo` es el ON/OFF manual (con escritura:insumo).
  */
 @Entity("insumo")
